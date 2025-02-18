@@ -1,0 +1,21 @@
+**/.DS_Store
+**/.vscode
+**/*.pyc
+**/.venv
+**/venv
+**/__pycache__
+**/rtl-sdr.rules
+**/.next
+**/node_modules
+**/package-lock.json
+**/*.log
+**/*.db
+
+# kicad
+*.bak
+*.kicad_pcb-bak
+*.kicad_sch-bak
+*.kicad_*.lck
+*-backups/
+fp-info-cache
+**/fp-info-cache
