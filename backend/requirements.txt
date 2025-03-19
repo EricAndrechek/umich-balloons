@@ -1,0 +1,8 @@
+fastapi
+paho-mqtt
+psycopg2
+asyncpg
+supabase
+uvicorn
+pydantic
+python-dotenv
