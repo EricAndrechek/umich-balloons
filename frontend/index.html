@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Balloon Tracker</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script src='https://api.mapbox.com/mapbox-gl-js/v3.1.0/mapbox-gl.js'></script>
+    <link href='https://api.mapbox.com/mapbox-gl-js/v3.1.0/mapbox-gl.css' rel='stylesheet' />
+    <style>
+        body { margin: 0; padding: 0; }
+        #map { position: absolute; top: 0; bottom: 0; width: 100%; }
+        #balloon-info {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background-color: white;
+            padding: 10px;
+            border-radius: 5px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+            z-index: 1;
+            min-width: 200px;
+        }
+        h2 { margin-top: 0; }
+        p { margin: 5px 0; }
+        strong { min-width: 80px; display: inline-block; }
+    </style>
+</head>
+<body>
+
+<div id="balloon-info">
+    <h2>Balloon Information</h2>
+</div>
+
+<div id="map"></div>
+<button id="clear-path" style="position: absolute; top: 10px; right: 10px; z-index: 1; padding: 5px 10px; background-color: white; border: 1px solid #ccc; cursor: pointer; border-radius: 5px;">Clear Path</button>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script>
+    // Replace with your actual Mapbox access token
+    mapboxgl.accessToken = 'YOUR_MAPBOX_ACCESS_TOKEN';
+    
+    // Replace with your Supabase project URL and anon key
+    const supabaseUrl = 'YOUR_SUPABASE_URL';
+    const supabaseKey = 'YOUR_SUPABASE_ANON_KEY';
+    const supabase = createClient(supabaseUrl, supabaseKey);
+
+    const map = new mapboxgl.Map({
+        container: 'map',
+        style: 'mapbox://styles/mapbox/satellite-streets-v12',
+        center: [-90, 40],
+        zoom: 3
+    });
+
+    // Add a custom image for the balloon marker
+    map.loadImage(
+        'https://i.imgur.com/g0ZUJWF.png',
+        (error, image) => {
+            if (error) throw error;
+            map.addImage('balloon-marker', image);
+        }
+    );
+
+    let balloonMarker = null;
+    let pathCoordinates = [];
+
+    document.getElementById('clear-path').onclick = clearPath;
+
+    function clearPath() {
+        pathCoordinates = [];
+        updatePathLine();
+    }
+
+    async function getInitialData() {
+        const { data, error } = await supabase
+            .from('telemetry')
+            .select('*')
+            .order('timestamp', { ascending: false })
+            .limit(200);
+
+        if (error) {
+            console.error('Error fetching initial data:', error);
+            displayError('Failed to load initial data. Check console for details.');
+            return;
+        }
+
+        if (data && data.length > 0) {
+            data.sort((a, b) => a.timestamp - b.timestamp);
+            pathCoordinates = data.map(item => [item.lon, item.lat]);
+            updateMapAndInfo(data[data.length - 1], true);
+        } else {
+            displayMessage('No data available yet.');
+        }
+    }
+
+    function updateMapAndInfo(telemetry, recenter = true) {
+        if (!telemetry) return;
+
+        const { id, lat, lon, alt, speed, source, timestamp, ...other } = telemetry;
+
+        let infoHTML = `
+            <h2>Balloon Information</h2>
+            <p><strong>ID:</strong> ${id}</p>
+            <p><strong>Latitude:</strong> ${lat}</p>
+            <p><strong>Longitude:</strong> ${lon}</p>
+            <p><strong>Altitude:</strong> ${alt !== undefined ? alt.toFixed(2) + ' m' : 'N/A'}</p>
+            <p><strong>Speed:</strong> ${speed !== undefined ? speed.toFixed(2) + ' m/s' : 'N/A'}</p>
+            <p><strong>Source:</strong> ${source}</p>
+            <p><strong>Timestamp:</strong> ${new Date(timestamp * 1000).toLocaleString()}</p>
+        `;
+
+        // Add other telemetry data
+        for (const key in other) {
+            if (other.hasOwnProperty(key) && key !== 'id' && key !== 'lat' && key !== 'lon' && key !== 'alt' && key !== 'speed' && key !== 'source' && key !== 'timestamp') {
+                infoHTML += `<p><strong>${key}:</strong> ${other[key]}</p>`;
+            }
+        }
+
+        document.getElementById('balloon-info').innerHTML = infoHTML;
+
+        pathCoordinates.push([lon, lat]);
+
+        if (pathCoordinates.length > 500) {
+            pathCoordinates.shift();
+        }
+
+        if (balloonMarker) {
+            balloonMarker.setLngLat([lon, lat]);
+        } else {
+            balloonMarker = new mapboxgl.Marker({
+                element: document.createElement('div'),
+            })
+            .setLngLat([lon, lat]);
+            const markerElement = balloonMarker.getElement();
+            markerElement.style.backgroundImage = 'url(https://i.imgur.com/g0ZUJWF.png)';
+            markerElement.style.backgroundSize = 'cover';
+            markerElement.style.width = '30px';
+            markerElement.style.height = '30px';
+            balloonMarker.addTo(map);
+        }
+
+        updatePathLine();
+
+        if (recenter) {
+            map.setCenter([lon, lat]);
+        }
+    }
+
+    function updatePathLine() {
+        if (map.getSource('route')) {
+            map.getSource('route').setData({
+                type: 'Feature',
+                properties: {},
+                geometry: {
+                    type: 'LineString',
+                    coordinates: pathCoordinates
+                }
+            });
+        } else {
+            map.addSource('route', {
+                type: 'geojson',
+                data: {
+                    type: 'Feature',
+                    properties: {},
+                    geometry: {
+                        type: 'LineString',
+                        coordinates: pathCoordinates
+                    }
+                }
+            });
+            map.addLayer({
+                id: 'route',
+                type: 'line',
+                source: 'route',
+                layout: {
+                    'line-join': 'round',
+                    'line-cap': 'round'
+                },
+                paint: {
+                    'line-color': '#3887be',
+                    'line-width': 2
+                }
+            });
+        }
+    }
+
+    function displayMessage(message) {
+        const balloonInfo = document.getElementById('balloon-info');
+        balloonInfo.innerHTML = `<h2>${message}</h2>`;
+        // Optionally clear the message after a few seconds:
+        setTimeout(() => {
+            if (balloonInfo.innerHTML === `<h2>${message}</h2>`) {
+                balloonInfo.innerHTML = '<h2>Balloon Information</h2>';
+            }
+        }, 8000);
+    }
+
+    function displayError(message) {
+        const balloonInfo = document.getElementById('balloon-info');
+        balloonInfo.innerHTML = `<h2 style="color: red;">Error: ${message}</h2>`;
+        // Optionally clear the error after a longer time or on user interaction:
+        setTimeout(() => {
+            if (balloonInfo.innerHTML === `<h2 style="color: red;">Error: ${message}</h2>`) {
+                balloonInfo.innerHTML = '<h2>Balloon Information</h2>';
+            }
+        }, 15000);
+    }
+
+    map.on('load', () => {
+        getInitialData();
+        map.addControl(new mapboxgl.NavigationControl());
+
+        const channel = supabase.channel('public:telemetry');
+        channel.on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'telemetry' },
+            (payload) => {
+                updateMapAndInfo(payload.new);
+            }
+        ).subscribe();
+    });
+</script>
+
+</body>
+</html>
