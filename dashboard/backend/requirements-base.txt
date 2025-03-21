@@ -1,0 +1,11 @@
+fastapi
+paho-mqtt
+asyncpg
+supabase
+python-dotenv
+geojson
+pydantic-settings
+PyJWT
+uvicorn
+pytest
+requests
