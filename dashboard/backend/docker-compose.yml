@@ -1,0 +1,156 @@
+services:
+  # Nginx Reverse Proxy
+  nginx:
+    image: nginx:1.25-alpine
+    container_name: nginx
+    ports:
+      - "127.0.0.1:80:80"
+    volumes:
+      - ./nginx/app.conf:/etc/nginx/conf.d/app.conf:ro
+      - nginx_logs:/var/log/nginx
+    depends_on:
+      sse:
+        condition: service_started
+        # TODO: could remove sse maybe so that can keep working if sse is down
+      api:
+        condition: service_healthy
+    networks:
+      - balloon_net
+    restart: unless-stopped
+
+  # Node.js Application
+  sse:
+    build: ./sse
+    container_name: sse-broadcaster
+    depends_on:
+      redis:
+        condition: service_started
+    environment:
+      - NODE_ENV=production
+      - HTTP_PORT=3000
+      - REDIS_URL=${REDIS_URL}
+    networks:
+      - balloon_net
+    restart: unless-stopped
+  
+  api:
+    build: ./api
+    container_name: api
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=${REDIS_URL}
+    networks:
+      - balloon_net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s # Give FastAPI time to start
+  
+  # PostgreSQL Database
+  postgres:
+    image: postgis/postgis
+    container_name: postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./sql/schema.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - balloon_net
+    ports:
+      - "5432:5432"
+    healthcheck: # Basic check to see if Postgres is ready
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB -q && psql -U $$POSTGRES_USER -d $$POSTGRES_DB -c 'SELECT 1 FROM public.payloads LIMIT 1' -q -A -t"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s # Give Postgres time to start
+
+  # Redis Service
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    command: redis-server --save "" --appendonly no
+    volumes:
+      - redis_data:/data
+    networks:
+      - balloon_net
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+  
+  aprs:
+    build: ./aprs
+    container_name: aprs
+    depends_on:
+      redis:
+        condition: service_started
+    environment:
+      - REDIS_URL=${REDIS_URL}
+    restart: unless-stopped
+    networks:
+      - balloon_net
+  
+  mosquitto:
+    image: eclipse-mosquitto
+    container_name: mosquitto
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./mosquitto/config:/mosquitto/config:ro
+      - ./mosquitto/data:/mosquitto/data
+      - ./mosquitto/log:/mosquitto/log
+      # entrypoint for setting username and password
+      - ./mosquitto/entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
+    environment:
+      # Pass credentials from .env file for the entrypoint script to use
+      - MQTT_USERNAME=${MQTT_USERNAME}
+      - MQTT_PASSWORD=${MQTT_PASSWORD}
+      - MQTT_BRIDGE_USER=${MQTT_BRIDGE_USER}
+      - MQTT_BRIDGE_PASSWORD=${MQTT_BRIDGE_PASSWORD}
+    # Override the default entrypoint/command to run your script
+    entrypoint: /usr/local/bin/entrypoint.sh
+    networks: 
+      - balloon_net
+    restart: unless-stopped
+  
+  mqtt-bridge:
+    build: ./mqtt-bridge
+    container_name: mqtt-bridge
+    depends_on:
+      - mosquitto
+      - redis
+    environment:
+      - REDIS_URL=${REDIS_URL}
+      - MQTT_BROKER_HOST=mosquitto # Service name
+      - MQTT_BROKER_PORT=1883
+      - MQTT_BRIDGE_USER=${MQTT_BRIDGE_USER} # Load from .env
+      - MQTT_BRIDGE_PASSWORD=${MQTT_BRIDGE_PASSWORD} # Load from .env
+    networks:
+      - balloon_net
+    restart: unless-stopped
+    
+networks:
+  balloon_net:
+    driver: bridge
+
+volumes:
+  pg_data:
+  redis_data:
+  nginx_logs:
