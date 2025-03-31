@@ -4,41 +4,30 @@
 set -e
 
 # --- Configuration ---
-PI_USERNAME="${MQTT_USERNAME}"
-PI_PASSWORD="${MQTT_PASSWORD}"
-BRIDGE_USERNAME="${MQTT_BRIDGE_USER}"
+BRIDGE_USERNAME="${MQTT_BRIDGE_USERNAME}"
 BRIDGE_PASSWORD="${MQTT_BRIDGE_PASSWORD}"
-PASSWORD_FILE="/mosquitto/config/passwd"
+
 CONFIG_FILE="/mosquitto/config/mosquitto.conf"
 
 # --- Validate Input ---
-if [ -z "${PI_USERNAME}" ] || [ -z "${PI_PASSWORD}" ] || \
-   [ -z "${BRIDGE_USERNAME}" ] || [ -z "${BRIDGE_PASSWORD}" ]; then
-  echo "Error: MQTT_USERNAME, MQTT_PASSWORD, MQTT_BRIDGE_USER, and MQTT_BRIDGE_PASSWORD environment variables must be set." >&2
+if [ -z "${BRIDGE_USERNAME}" ] || [ -z "${BRIDGE_PASSWORD}" ]; then
+  echo "Error: MQTT_BRIDGE_USER and MQTT_BRIDGE_PASSWORD environment variables must be set." >&2
   exit 1
 fi
 
-# --- Create/Update Password File ---
-echo "Setting up MQTT users..."
-mkdir -p "$(dirname "${PASSWORD_FILE}")"
-
-# Create file with the FIRST user (-c flag)
-if ! mosquitto_passwd -b -c "${PASSWORD_FILE}" "${PI_USERNAME}" "${PI_PASSWORD}"; then
-    echo "Error: Failed initial mosquitto_passwd for PI user." >&2; exit 1;
-fi
-echo "Added/Updated PI user '${PI_USERNAME}'."
-
-# Add the SECOND user (no -c flag)
-if ! mosquitto_passwd -b "${PASSWORD_FILE}" "${BRIDGE_USERNAME}" "${BRIDGE_PASSWORD}"; then
-    echo "Error: Failed adding BRIDGE user with mosquitto_passwd." >&2; exit 1;
-fi
-echo "Added/Updated BRIDGE user '${BRIDGE_USERNAME}'."
-
-
-# Set permissions
-chown mosquitto:mosquitto "${PASSWORD_FILE}" || echo "Warning: Could not chown password file."
-chmod 600 "${PASSWORD_FILE}"
-echo "Password file permissions set."
+# --- Modify *.js scripts to include the new user ---
+echo "Modifying *.js scripts to include the new user..."
+# look for all *.js files in the /mosquitto/config directory
+# and replace:
+# bridge_username = "bridge_username";
+# bridge_password = "bridge_password";
+# with the username and password from the environment variables
+for file in /mosquitto/config/*.js; do
+  if [ -f "$file" ]; then
+    sed -i "s/bridge_username = \"bridge_username\";/bridge_username = \"${BRIDGE_USERNAME}\";/g" "$file"
+    sed -i "s/bridge_password = \"bridge_password\";/bridge_password = \"${BRIDGE_PASSWORD}\";/g" "$file"
+  fi
+done
 
 # --- Start Mosquitto ---
 echo "Starting Mosquitto..."
