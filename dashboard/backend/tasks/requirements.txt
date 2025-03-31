@@ -1,0 +1,5 @@
+celery[redis]>=5.0 # Or your specific Celery version
+redis>=4.0       # Or your specific redis-py version
+supervisor      # For process management
+# Add any libraries needed by your *task* code (e.g., requests, numpy, etc.)
+aprspy

@@ -1,6 +1,6 @@
 FROM node:20-alpine AS base
 
-WORKDIR /usr/src/sse
+WORKDIR /usr/src/app
 
 # Copy package.json and package-lock.json (if available)
 COPY package*.json ./
@@ -20,7 +20,7 @@ FROM base AS production
 ENV NODE_ENV=production
 
 # Copy only necessary files from previous stages
-COPY --from=dependencies /usr/src/sse/node_modules ./node_modules
+COPY --from=dependencies /usr/src/app/node_modules ./node_modules
 COPY package*.json ./
 COPY server.js .
 

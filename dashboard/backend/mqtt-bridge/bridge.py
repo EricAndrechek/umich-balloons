@@ -1,165 +1,172 @@
-import os
-import json
-import logging
-import time
-from datetime import datetime, timezone
+# Script to connect to MQTT broker and Redis and:
+# publish +/aprs, +/lora, and +/status MQTT messages from MQTT --> Redis 
+# and to publish Redis "sync" messages --> MQTT broker under +/sync
 
 import paho.mqtt.client as mqtt
 import redis
+from redis import Redis
+from redis.client import PubSub
+import os
+import json
+import logging
+from datetime import datetime
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
-)
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+MQTT_BROKER_HOST = os.getenv("MQTT_BROKER_HOST", "localhost")
+MQTT_BROKER_PORT = int(os.getenv("MQTT_BROKER_PORT", 1883))
+MQTT_BRIDGE_USERNAME = os.getenv("MQTT_BRIDGE_USERNAME", "user")
+MQTT_BRIDGE_PASSWORD = os.getenv("MQTT_BRIDGE_PASSWORD", "password")
+
+# Configure logging
+
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# --- Configuration ---
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
-TASK_QUEUE_NAME = "raw_message_queue"
-GATEWAY_LAST_SEEN_PREFIX = "gateway:last_seen:"
-HEARTBEAT_INTERVAL_SECONDS = 600  # Match Pi's interval for expiry calculation
+redis_client = None
+mqtt_client = None
 
-MQTT_BROKER_HOST = os.getenv("MQTT_BROKER_HOST", "mosquitto")
-MQTT_BROKER_PORT = int(os.getenv("MQTT_BROKER_PORT", "1883"))
-MQTT_USERNAME = os.getenv(
-    "MQTT_BRIDGE_USER", "bridge_user"
-)  # Dedicated user for the bridge
-MQTT_PASSWORD = os.getenv(
-    "MQTT_BRIDGE_PASSWORD", "bridge_password"
-)  # Set in .env and Mosquitto passwd file
-MQTT_DATA_TOPIC = "gateways/+/data"  # Subscribe to data from all gateways
-MQTT_STATUS_TOPIC = "gateways/+/status"  # Subscribe to status updates
-
-# --- Redis Client (Using blocking client here for simplicity) ---
-try:
-    redis_client = redis.from_url(REDIS_URL, decode_responses=True)
-    redis_client.ping()
-    logger.info("Connected to Redis successfully.")
-except redis.RedisError as e:
-    logger.error(f"Failed to connect to Redis: {e}")
-    exit(1)
-
-
-# --- MQTT Callbacks ---
-def on_connect(client, userdata, flags, rc, properties=None):
-    if rc == 0:
-        logger.info("Connected to MQTT Broker successfully.")
-        # Subscribe on connect/reconnect
-        client.subscribe(MQTT_DATA_TOPIC, qos=1)
-        logger.info(f"Subscribed to data topic: {MQTT_DATA_TOPIC}")
-        client.subscribe(MQTT_STATUS_TOPIC, qos=1)
-        logger.info(f"Subscribed to status topic: {MQTT_STATUS_TOPIC}")
-    else:
-        logger.error(f"Failed to connect to MQTT Broker, return code {rc}")
-
-
-def on_disconnect(client, userdata, rc, properties=None):
-    logger.warning(
-        f"Disconnected from MQTT Broker, return code {rc}. Will attempt reconnection."
-    )
-
-
-def update_gateway_status(gateway_id: str, payload_str: str):
-    """Process status messages (online/offline from LWT)."""
+def setup_redis():
+    global redis_client
     try:
-        payload = json.loads(payload_str)
-        is_online = payload.get("online", False)  # Expecting {"online": true/false}
-        logger.info(
-            f"Status update for {gateway_id}: {'Online' if is_online else 'Offline'}"
-        )
-        # Update Redis last_seen only if online, let expiry handle offline timeout
-        if is_online:
-            now_iso = datetime.now(timezone.utc).isoformat()
-            redis_client.set(
-                f"{GATEWAY_LAST_SEEN_PREFIX}{gateway_id}",
-                now_iso,
-                ex=HEARTBEAT_INTERVAL_SECONDS * 3,
-            )
-        # Optionally: Store explicit offline status in Redis/DB if needed beyond timeout
-        # else: redis_client.set(f"{GATEWAY_STATUS_PREFIX}{gateway_id}", "offline")
-
-    except (json.JSONDecodeError, Exception) as e:
-        logger.error(
-            f"Failed to process status message for {gateway_id}: {e}, Payload: {payload_str}"
-        )
-
-
-def queue_data_message(gateway_id: str, payload_bytes: bytes):
-    """Format and push data message to Redis queue."""
-    try:
-        # Assume payload_bytes is the JSON string sent by the Pi
-        raw_message_payload = json.loads(payload_bytes.decode("utf-8"))
-
-        # Construct task data matching Task Handler's expectation
-        # We need to map the Pi's payload format to RawMessageTaskData format
-        task_data = {
-            "identifier_type": raw_message_payload.get(
-                "type", "unknown"
-            ),  # Pi needs to send this
-            "identifier_value": raw_message_payload.get("id"),  # Pi needs to send this
-            "source": raw_message_payload.get("source", "MQTT Gateway"),
-            "source_id": raw_message_payload.get("via"),  # Optional info from Pi packet
-            "raw_data": raw_message_payload.get(
-                "raw"
-            ),  # Pi needs to send the raw packet string
-            "data_time": raw_message_payload.get(
-                "time"
-            ),  # Pi sends timestamp if available (ISO format)
-            "gateway_id": gateway_id,  # Extracted from topic
-        }
-        task_data_json = json.dumps(task_data)
-
-        redis_client.lpush(TASK_QUEUE_NAME, task_data_json)
-        logger.debug(f"Queued data message from gateway {gateway_id}")
-
-    except (json.JSONDecodeError, UnicodeDecodeError, redis.RedisError, Exception) as e:
-        logger.error(
-            f"Failed to queue data message from {gateway_id}: {e}, Payload: {payload_bytes[:100]}..."
-        )
-        # Consider dead-letter queue
-
-
-def on_message(client, userdata, msg):
-    logger.debug(f"Received message on topic {msg.topic}")
-    try:
-        topic_parts = msg.topic.split("/")
-        if len(topic_parts) >= 3:
-            gateway_id = topic_parts[1]
-            message_type = topic_parts[2]
-
-            if message_type == "data":
-                queue_data_message(gateway_id, msg.payload)
-            elif message_type == "status":
-                update_gateway_status(gateway_id, msg.payload.decode("utf-8"))
-            else:
-                logger.warning(
-                    f"Unknown message type '{message_type}' on topic {msg.topic}"
-                )
-        else:
-            logger.warning(f"Unexpected topic structure: {msg.topic}")
-
+        logger.info(f"Connecting to Redis at {REDIS_URL}")
+        redis_client = Redis.from_url(REDIS_URL, db=0)
+        redis_client.ping()  # Test the connection
+        logger.info("Redis connection established successfully.")
+    except redis.ConnectionError as e:
+        logger.error(f"Failed to connect to Redis: {e}")
+        raise
     except Exception as e:
-        logger.exception(f"Error processing message on topic {msg.topic}: {e}")
+        logger.error(f"Failed to connect to Redis: {e}")
+        raise
+    return redis_client
 
+def setup_mqtt():
+    global mqtt_client
 
-# --- MQTT Client Setup ---
-mqtt_client = mqtt.Client(
-    mqtt.CallbackAPIVersion.VERSION2, client_id="mqtt-bridge-service"
-)
-mqtt_client.on_connect = on_connect
-mqtt_client.on_disconnect = on_disconnect
-mqtt_client.on_message = on_message
+    logger.info(f"Connecting to MQTT broker at {MQTT_BROKER_HOST}:{MQTT_BROKER_PORT}")
+    mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+    mqtt_client.username_pw_set(MQTT_BRIDGE_USERNAME, MQTT_BRIDGE_PASSWORD)
 
-# Set username/password
-if MQTT_USERNAME and MQTT_PASSWORD:
-    mqtt_client.username_pw_set(MQTT_USERNAME, MQTT_PASSWORD)
-else:
-    logger.warning(
-        "MQTT username/password not set. Connecting anonymously (if allowed by broker)."
-    )
+    # The callback for when the client receives a CONNACK response from the server.
+    def on_connect(client, userdata, flags, reason_code, properties):
+        logger.info(f"Connected to MQTT broker at {MQTT_BROKER_HOST}:{MQTT_BROKER_PORT} with result code {reason_code}")
 
-# Attempt connection (with automatic reconnect loop)
-mqtt_client.connect(MQTT_BROKER_HOST, MQTT_BROKER_PORT, 60)
+        res = client.subscribe("+/aprs", 1)
+        logger.info(f"Subscribed to topic +/aprs with result: {res}")
+        res = client.subscribe("+/lora", 1)
+        logger.info(f"Subscribed to topic +/lora with result: {res}")
+        res = client.subscribe("+/status", 1)
+        logger.info(f"Subscribed to topic +/status with result: {res}")
 
-# Start network loop (blocking)
-logger.info("Starting MQTT loop...")
-mqtt_client.loop_forever()  # Handles reconnects automatically
+        logger.info("Subscribed to topics: +/aprs, +/lora, +/status")
+
+        # tell the broker that this client (the bridge) is online
+        res = client.publish("BRIDGE/status", payload="online", qos=1, retain=True)
+        logger.info(f"Published online status to topic BRIDGE/status with result: {res}")
+
+    def on_message(client, userdata, msg):
+        logger.info("on_message called")
+        topic = msg.topic
+        payload = msg.payload.decode('utf-8')
+        logger.debug(f"Received message on topic {topic}: {payload}")
+        logger.info(f"Received message on topic {topic}: {payload}")
+        # Publish the message to Redis
+        publish_to_redis(topic, payload)
+        logger.info(f"Published message to Redis topic {topic}: {payload}")
+
+    mqtt_client.on_connect = on_connect
+    mqtt_client.on_message = on_message
+    mqtt_client.will_set("BRIDGE/status", payload="offline", qos=1, retain=True)
+
+    try:
+        mqtt_client.connect(MQTT_BROKER_HOST, MQTT_BROKER_PORT)
+        logger.info(f"Connected to MQTT broker at {MQTT_BROKER_HOST}:{MQTT_BROKER_PORT}")
+    except Exception as e:
+        logger.error(f"Failed to connect to MQTT broker: {e}")
+        raise
+
+    return mqtt_client
+
+def publish_to_mqtt(topic, payload):
+    if mqtt_client is not None:
+        try:
+            mqtt_client.publish(topic, payload)
+            logger.info(f"Published message to topic {topic}: {payload}")
+        except Exception as e:
+            logger.error(f"Failed to publish message to MQTT: {e}")
+    else:
+        logger.warning("MQTT client is not initialized. Cannot publish message.")
+
+def publish_to_redis(topic, payload):
+    if redis_client is not None:
+        try:
+
+            data = {
+                "sender": topic.split("/")[0],  # Split the topic into parts
+                "payload": payload,
+                "timestamp": datetime.utcnow().isoformat()
+            }
+
+            # if the topic falls under the "+/status" wildcard, publish to the "status" channel
+            if topic.endswith("/status"):
+                redis_client.publish("status", json.dumps(data))
+
+            # not a "pubsub" channel, but rather a parsing task, so just rpush
+            elif topic.endswith("/aprs"):
+                redis_client.rpush("aprs", json.dumps(data))
+            elif topic.endswith("/lora"):
+                redis_client.rpush("lora", json.dumps(data))
+
+            else:
+                logger.warning(f"Unknown topic format: {topic}. Not publishing to Redis.")
+                return
+            
+            logger.info(f"Published message to Redis {topic}: {payload}")
+        except Exception as e:
+            logger.error(f"Failed to publish message to Redis: {e}")
+    else:
+        logger.warning("Redis client is not initialized. Cannot publish message.")
+
+def main():
+    global mqtt_client, redis_client
+    try:
+        # Setup Redis and MQTT clients
+        redis_client = setup_redis()
+        mqtt_client = setup_mqtt()
+
+        # Start the MQTT loop in a separate thread
+        mqtt_client.loop_start()
+
+        # Subscribe to Redis channels and publish messages to MQTT
+        pubsub = redis_client.pubsub()
+        pubsub.subscribe("sync")
+
+        logger.info("Listening for messages on Redis channels...")
+        for message in pubsub.listen():
+            if message['type'] == 'message':
+                topic = message['channel'].decode('utf-8')
+                payload = message['data'].decode('utf-8')
+                logger.debug(f"Received message on Redis channel {topic}: {payload}")
+                # Publish the message to MQTT
+                publish_to_mqtt("+/sync", payload)
+
+    except KeyboardInterrupt:
+        logger.info("Shutting down...")
+    finally:
+        if mqtt_client is not None:
+            mqtt_client.loop_stop()
+            mqtt_client.disconnect()
+        if redis_client is not None:
+            redis_client.close()
+        logger.info("Disconnected from Redis and MQTT broker.")
+        logger.info("Exiting...")
+        exit(0)
+
+if __name__ == "__main__":
+    logger.info("Starting MQTT-Redis bridge...")
+    logger.info(f"Redis URL: {REDIS_URL}")
+    logger.info(f"MQTT Broker Host: {MQTT_BROKER_HOST}")
+    logger.info(f"MQTT Broker Port: {MQTT_BROKER_PORT}")
+    logger.info(f"MQTT Bridge Username: {MQTT_BRIDGE_USERNAME}")
+    logger.info(f"MQTT Bridge Password: {MQTT_BRIDGE_PASSWORD}")
+    main()

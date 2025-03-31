@@ -9,9 +9,9 @@ services:
       - ./nginx/app.conf:/etc/nginx/conf.d/app.conf:ro
       - nginx_logs:/var/log/nginx
     depends_on:
-      sse:
+      websocket-broadcaster:
         condition: service_started
-        # TODO: could remove sse maybe so that can keep working if sse is down
+        # TODO: could remove websocket-broadcaster maybe so that can keep working if websocket-broadcaster is down
       api:
         condition: service_healthy
     networks:
@@ -19,9 +19,9 @@ services:
     restart: unless-stopped
 
   # Node.js Application
-  sse:
-    build: ./sse
-    container_name: sse-broadcaster
+  websocket-broadcaster:
+    build: ./websockets
+    container_name: websocket-broadcaster
     depends_on:
       redis:
         condition: service_started
@@ -81,7 +81,7 @@ services:
   redis:
     image: redis:7-alpine
     container_name: redis
-    command: redis-server --save "" --appendonly no
+    command: redis-server
     volumes:
       - redis_data:/data
     networks:
@@ -95,34 +95,32 @@ services:
       timeout: 5s
       retries: 5
   
-  aprs:
-    build: ./aprs
-    container_name: aprs
-    depends_on:
-      redis:
-        condition: service_started
-    environment:
-      - REDIS_URL=${REDIS_URL}
-    restart: unless-stopped
-    networks:
-      - balloon_net
+  # aprs:
+  #   build: ./aprs
+  #   container_name: aprs
+  #   depends_on:
+  #     redis:
+  #       condition: service_started
+  #   environment:
+  #     - REDIS_URL=${REDIS_URL}
+  #   restart: unless-stopped
+  #   networks:
+  #     - balloon_net
   
   mosquitto:
-    image: eclipse-mosquitto
+    image: iegomez/mosquitto-go-auth:latest
     container_name: mosquitto
     ports:
       - "1883:1883"
     volumes:
-      - ./mosquitto/config:/mosquitto/config:ro
+      - ./mosquitto/config:/mosquitto/config
       - ./mosquitto/data:/mosquitto/data
       - ./mosquitto/log:/mosquitto/log
       # entrypoint for setting username and password
       - ./mosquitto/entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
     environment:
       # Pass credentials from .env file for the entrypoint script to use
-      - MQTT_USERNAME=${MQTT_USERNAME}
-      - MQTT_PASSWORD=${MQTT_PASSWORD}
-      - MQTT_BRIDGE_USER=${MQTT_BRIDGE_USER}
+      - MQTT_BRIDGE_USERNAME=${MQTT_BRIDGE_USERNAME}
       - MQTT_BRIDGE_PASSWORD=${MQTT_BRIDGE_PASSWORD}
     # Override the default entrypoint/command to run your script
     entrypoint: /usr/local/bin/entrypoint.sh
@@ -140,8 +138,21 @@ services:
       - REDIS_URL=${REDIS_URL}
       - MQTT_BROKER_HOST=mosquitto # Service name
       - MQTT_BROKER_PORT=1883
-      - MQTT_BRIDGE_USER=${MQTT_BRIDGE_USER} # Load from .env
+      - MQTT_BRIDGE_USERNAME=${MQTT_BRIDGE_USERNAME} # Load from .env
       - MQTT_BRIDGE_PASSWORD=${MQTT_BRIDGE_PASSWORD} # Load from .env
+    networks:
+      - balloon_net
+    restart: unless-stopped
+  
+  tasks:
+    build: ./tasks
+    container_name: tasks
+    depends_on:
+      - postgres
+      - redis
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=${REDIS_URL}
     networks:
       - balloon_net
     restart: unless-stopped
