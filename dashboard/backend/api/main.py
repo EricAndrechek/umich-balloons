@@ -11,7 +11,9 @@ from contextlib import asynccontextmanager
 from redis_clients import create_redis_pools, close_redis_pools, get_redis_cache, get_redis_message_db
 from redis.asyncio.client import Redis
 
-logging.basicConfig(level=logging.INFO)
+from utils.ip import get_ip
+
+logging.basicConfig(level=logging.DEBUG)
 log = logging.getLogger(__name__)
 
 @asynccontextmanager
@@ -59,6 +61,11 @@ app.add_middleware(
 from iridium.route import router as iridium_router
 app.include_router(iridium_router, prefix="/api")
 
+from aprs.route import router as aprs_router
+app.include_router(aprs_router, prefix="/api")
+
+from lora.route import router as lora_router
+app.include_router(lora_router, prefix="/api")
 
 # --- API Endpoints ---
 @app.get("/api/health", summary="Health Check")
@@ -84,7 +91,7 @@ async def force_prediction(
     """
 
     # get ip address from the request
-    client_ip = x_forwarded_for if x_forwarded_for else request.client.host
+    client_ip = get_ip(request, x_forwarded_for)
 
     redis_data = {
         "sender": client_ip,
@@ -122,7 +129,7 @@ async def force_path_gen(
     """
 
     # get ip address from the request
-    client_ip = x_forwarded_for if x_forwarded_for else request.client.host
+    client_ip = get_ip(request, x_forwarded_for)
 
     redis_data = {
         "sender": client_ip,
@@ -143,78 +150,4 @@ async def force_path_gen(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to queue the request.",
-        )
-
-@app.post("/api/manual/aprs", status_code=status.HTTP_202_ACCEPTED, summary="Upload raw APRS Message")
-async def force_path_gen(
-    request: Request,
-    payload: str = Body(...),
-    x_forwarded_for: str | None = Header(default=None),
-    message_queue: Redis = Depends(get_redis_message_db)
-):
-    """
-    Manually upload a raw APRS message.
-    This is a manual trigger for the APRS processing task.
-    The request is queued for asynchronous processing.
-    """
-
-    # get ip address from the request
-    client_ip = x_forwarded_for if x_forwarded_for else request.client.host
-
-    redis_data = {
-        "sender": client_ip,
-        "payload": payload,
-        "timestamp": datetime.utcnow().isoformat()
-    }
-
-    # Push the message onto the Redis queue
-    queue_number = await message_queue.rpush("aprs", json.dumps(redis_data))
-
-    # --- Return Response ---
-    # should be accepted if the message is queued successfully
-    if queue_number > 0:
-        log.info(f"Message queued successfully. Queue number: {queue_number}")
-        return {"status": "queued", "queue_number": queue_number}
-    else:
-        log.error("Failed to queue the message.")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to queue the message.",
-        )
-
-@app.post("/api/manual/lora", status_code=status.HTTP_202_ACCEPTED, summary="Upload raw LoRa Message")
-async def force_path_gen(
-    request: Request,
-    payload: str = Body(...),
-    x_forwarded_for: str | None = Header(default=None),
-    message_queue: Redis = Depends(get_redis_message_db)
-):
-    """
-    Manually upload a raw LoRa message.
-    This is a manual trigger for the LoRa processing task.
-    The request is queued for asynchronous processing.
-    """
-
-    # get ip address from the request
-    client_ip = x_forwarded_for if x_forwarded_for else request.client.host
-
-    redis_data = {
-        "sender": client_ip,
-        "payload": payload,
-        "timestamp": datetime.utcnow().isoformat()
-    }
-
-    # Push the message onto the Redis queue
-    queue_number = await message_queue.rpush("lora", json.dumps(redis_data))
-
-    # --- Return Response ---
-    # should be accepted if the message is queued successfully
-    if queue_number > 0:
-        log.info(f"Message queued successfully. Queue number: {queue_number}")
-        return {"status": "queued", "queue_number": queue_number}
-    else:
-        log.error("Failed to queue the message.")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to queue the message.",
         )

@@ -151,11 +151,43 @@ services:
       - postgres
       - redis
     environment:
-      - DATABASE_URL=${DATABASE_URL}
+      - ENV_LOG_LEVEL=INFO
       - REDIS_URL=${REDIS_URL}
+      - REDIS_QUEUE_DB=0
+      - REDIS_CACHE_DB=1
+      - ENV_CELERY_CONCURRENCY=4
+      - TZ=America/Detroit
+
+      - DATABASE_URL=${DATABASE_URL}
+      # adjust to keep max connections >> (concurrency * number_of_app_replicas * (pool_size + max_overflow))
+      - DB_POOL_SIZE=5                # Max persistent connections per worker process pool
+      - DB_MAX_OVERFLOW=2             # Max extra temp connections per worker process pool
+      - DB_POOL_RECYCLE=3600          # Recycle connections older than 1 hour (seconds)
     networks:
       - balloon_net
     restart: unless-stopped
+  
+  flower:
+    build:
+      context: ./tasks
+      dockerfile: Dockerfile
+    container_name: flower
+    command: >
+      celery --app=code.celery
+      --broker=${REDIS_URL}
+      flower
+      --address=0.0.0.0
+      --port=5555
+    ports:
+      - "5555:5555"
+    environment:
+      - REDIS_URL=${REDIS_URL}
+    depends_on:
+      - redis
+      # - tasks # can wait for tasks but can boot before that
+    restart: unless-stopped
+    networks:
+      - balloon_net
     
 networks:
   balloon_net:
