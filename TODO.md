@@ -1,0 +1,3 @@
+- Iridium momsn caching to avoid using duplicate messages
+- LoRa HTTP route w/ message id (and maybe callsign, etc (Auth??))
+- APRS http route? Auth?

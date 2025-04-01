@@ -7,19 +7,17 @@ create table if not exists public.payloads (
   id bigint generated always as identity not null,
 
   -- friendly name of the payload for UI
-  -- db trigger auto sets this to the aprs_callsign or iridium_imei if not provided
+  -- db trigger auto sets this to the callsign if not provided
   name text not null default ''::text,
 
-  -- unique identifiers for the payload for various protocols, must include at least one of these
-  aprs_callsign text null,
-  iridium_imei text null,
+  -- unique identifiers for the payload for aprs
+  callsign text null,
 
   constraint payloads_pkey primary key (id),
   constraint payloads_id_key unique (id),
   constraint payloads_name_key unique (name),
-  constraint payloads_aprs_callsign_key unique (aprs_callsign),
-  constraint payloads_iridium_imei_key unique (iridium_imei),
-  constraint payloads_at_least_one_id check (aprs_callsign is not null or iridium_imei is not null)
+  constraint payloads_callsign_key unique (callsign),
+  constraint payloads_at_least_one_id check (callsign is not null)
 ) TABLESPACE pg_default;
 
 -- Create trigger function to set name if not provided
@@ -31,7 +29,7 @@ set search_path = ''
 as $$
 begin
   if (NEW.name = '') then
-    NEW.name := coalesce(NEW.aprs_callsign, NEW.iridium_imei);
+    NEW.name := coalesce(NEW.callsign);
   end if;
   return NEW;
 end;
@@ -43,46 +41,20 @@ before insert on public.payloads
 for each row
 execute function set_default_payload_name();
 
--- Function to merge payloads
--- This function will merge the old payload into the target payload
--- and update all references to the old payload to point to the target payload
--- so that from psql you can do:
--- psql "postgres://username:password@host:port/database?sslmode=require" -c "SELECT public.merge_payloads(<target_payload_id>, <old_payload_id>);"
-CREATE OR REPLACE FUNCTION public.merge_payloads(
-  target_payload_id bigint,
-  old_payload_id bigint
-)
-RETURNS void
-LANGUAGE plpgsql
-security definer
-set search_path = ''
-AS $$
-BEGIN
-  -- Merge identifiers into target if missing
-  UPDATE public.payloads
-  SET 
-    aprs_callsign = COALESCE(aprs_callsign, (SELECT aprs_callsign FROM public.payloads WHERE id = old_payload_id)),
-    iridium_imei  = COALESCE(iridium_imei,  (SELECT iridium_imei FROM public.payloads WHERE id = old_payload_id))
-  WHERE id = target_payload_id;
+-- Create a spatial index on the payloads table
+create index if not exists payloads_callsign_idx
+  on public.payloads
+  using btree (callsign);
 
-  -- Update foreign key references in raw_messages and telemetry
-  UPDATE public.raw_messages
-    SET payload_id = target_payload_id
-    WHERE payload_id = old_payload_id;
+-- Create a btree index for name (to sort by name)
+create index if not exists payloads_name_idx
+  on public.payloads
+  using btree (name);
 
-  UPDATE public.telemetry
-    SET payload_id = target_payload_id
-    WHERE payload_id = old_payload_id;
-
-  -- Delete the old payload record
-  DELETE FROM public.payloads
-    WHERE id = old_payload_id;
-
-  RAISE NOTICE 'Merged payload % into payload %.', old_payload_id, target_payload_id;
-END;
-$$;
-
--- TODO: does indexing the payloads table make sense? Maybe on aprs_callsign or iridium_imei?
+-- Create another btree for payload id (to sort by id)
+create index if not exists payloads_id_idx
+  on public.payloads
+  using btree (id);
 
 -- ------------------------------
 -- -------- RAW_MESSAGES --------
@@ -93,24 +65,65 @@ $$;
 -- Can be multiple raw messages for a single payload at the same time (when data is received from multiple sources)
 create table if not exists public.raw_messages (
   id bigint generated always as identity not null,
-  payload_id bigint not null,
-
   server_received_at timestamp with time zone not null default (now() AT TIME ZONE 'utc'::text),
-  -- source can be iridium, aprs-is, lora, etc
-  source text not null,
-  -- unique identifier for the message from the source (e.g., APRS gateway callsign, which ground station, etc) if any
-  source_id text null,
-  -- TODO: should this be a jsonb column? Maybe not if APRS is string?
+
+  -- can be uploaded regardless of parsing:
+
   raw_data text not null,
-  -- timestamp of the message (if included in the og message, otherwise first seen timestamp)
+  
+  -- unique identifier for the message from the source (e.g., APRS gateway callsign, which ground station, etc) if any
+  -- since this is done pre-parsing, it could be an IP address or anything really, just best effort from what we have
+  source_id text null,
+  -- timestamp of the message from earliest unparsed source
   data_time timestamp with time zone null,
+
+  -- updated on insert to telemetry when relevant to this raw message:
+  -- references a telemetry message by id
+  telemetry_id uuid null,
+
+  -- source can be iridium, aprs-is, lora, etc
+  -- add more sources as discovered (ie server name, gateway name, IP address, relay callsign, etc)
+  sources text array null default '{}'::text[],
+
+  -- TODO: should these be enums?
+  -- How the server ultimately received this packet (HTTP, MQTT, APRS-IS)
+  ingest_method text null,
+  -- How the device originally transmitted the packet (APRS, LoRa, Iridium, etc)
+  transmit_method text null,
+
+  -- the one key sortable field that relayed the message
+  relay text null,
 
   constraint raw_messages_pkey primary key (id),
   constraint raw_messages_id_key unique (id),
-  constraint raw_messages_payload_id_fkey foreign KEY (payload_id) references payloads (id) on update CASCADE on delete CASCADE
+
+  -- invalidate/remove the telemetry_id if the telemetry message is deleted
+  constraint raw_messages_telemetry_id_fkey foreign KEY (telemetry_id) references public.telemetry (id) on update CASCADE on delete SET NULL
+
+  -- TODO: delete telemetry messages when there are no raw messages left pointing to them
+
 ) TABLESPACE pg_default;
 
--- TODO: do we need to index the raw messages by payload_id or anything else?
+-- sortable by when server received the message
+-- leave actual time of the message to be parsed/sorted by the telemetry table
+create index if not exists raw_messages_server_received_at_idx
+  on public.raw_messages
+  using btree (server_received_at);
+
+-- sort by ingest method (HTTP, MQTT, APRS-IS)
+create index if not exists raw_messages_ingest_method_idx
+  on public.raw_messages
+  using btree (ingest_method);
+
+-- sort by transmit method (APRS, LoRa, Iridium, etc)
+create index if not exists raw_messages_transmit_method_idx
+  on public.raw_messages
+  using btree (transmit_method);
+
+-- sort by relay (callsign of groundstation, IP address, etc)
+create index if not exists raw_messages_relay_idx
+  on public.raw_messages
+  using btree (relay);
 
 -- ------------------------------
 -- --------- TELEMETRY  ---------
@@ -121,15 +134,11 @@ create table if not exists public.raw_messages (
 -- Unfortunately right now this parsing has to happen via the backend and not SQL, so we can't just use triggers
 create table if not exists public.telemetry (
   id uuid not null default gen_random_uuid (),
+
   -- references payloads.id
   payload_id bigint not null,
-  
-  -- references a raw message by id
-  -- TODO: this should be an array of foreign keys to raw_messages.id
-  raw_sources bigint array not null,
-  -- cleartext of sources in order received
-  -- eg ['Iridium', 'APRS-IS via KD8CJT-9', 'LoRa via GS-1']
-  sources text array not null,
+
+  -- data_time *should* be in data packet, but otherwise these are db-set only (cannot be set by the user):
 
   -- timestamp of the last time this row was updated
   last_updated timestamp with time zone not null default (now() AT TIME ZONE 'utc'::text),
@@ -139,8 +148,12 @@ create table if not exists public.telemetry (
   -- can be updated to be earlier (but not later) by subsequent telemetry messages
   data_time timestamp with time zone null,
 
+  -- actual packet data:
+
   -- lat/long of the payload
   position GEOGRAPHY(POINT,4326) not null,
+  -- optional accuracy of the position in meters
+  accuracy double precision null,
   -- altitude in meters
   altitude double precision null,
   -- speed in meters per second
@@ -154,6 +167,9 @@ create table if not exists public.telemetry (
   
   constraint telemetry_pkey primary key (id),
   constraint telemetry_payload_id_fkey foreign KEY (payload_id) references payloads (id) on update CASCADE on delete CASCADE
+
+  -- TODO: delete telemetry messages when there are no raw messages left pointing to them
+
 ) TABLESPACE pg_default;
 
 -- Create a spatial index on position
@@ -161,12 +177,10 @@ create index if not exists telemetry_position_idx
   on public.telemetry
   using GIST (position);
 
--- Create a separate btree index for data_time (since timestamp with time zone doesn’t have a default GIST opclass)
+-- sortable by message timestamp
 create index if not exists telemetry_data_time_idx
   on public.telemetry
   using btree (data_time);
-
--- TODO: Btree gist
 
 -- Trigger to update the last_updated timestamp on telemetry insert or update
 CREATE OR REPLACE FUNCTION update_last_updated()

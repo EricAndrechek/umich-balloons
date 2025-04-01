@@ -1,5 +1,9 @@
-celery[redis]>=5.0 # Or your specific Celery version
-redis>=4.0       # Or your specific redis-py version
-supervisor      # For process management
+celery[redis]>=5.0  # Celery task queue
+redis>=4.0          # Redis connection
+supervisor          # Process management
+flower>=1.0         # Monitoring Celery tasks
+pydantic>=2.0.0     # Data validation
+sqlalchemy>=1.4     # SQL toolkit
+psycopg2-binary     # PostgreSQL database adapter
 # Add any libraries needed by your *task* code (e.g., requests, numpy, etc.)
-aprspy
+aprspy              # APRS message parser

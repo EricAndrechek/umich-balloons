@@ -8,10 +8,18 @@ import json # If you need to validate JSON before sending
 from .celery import app as celery_app
 
 # Configure basic logging for the watcher
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - watcher - %(message)s')
+LOG_LEVEL = os.environ.get('ENV_LOG_LEVEL', 'INFO').upper()
+if LOG_LEVEL not in ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']:
+    LOG_LEVEL = 'INFO'  # Default to INFO if not set or invalid
+logging.basicConfig(level=LOG_LEVEL, format='%(asctime)s - %(levelname)s - watcher - %(message)s')
+
+# Set up logging for the watcher
+logger = logging.getLogger(__name__)
 
 # --- Configuration ---
-REDIS_URL = os.environ.get('REDIS_URL', 'redis://redis:6379/0')
+REDIS_QUEUE_DB = os.environ.get('REDIS_QUEUE_DB', '0') # Default Redis DB for queues
+REDIS_CACHE_DB = os.environ.get('REDIS_CACHE_DB', '1') # Default Redis DB for cache
+REDIS_URL = os.environ.get('REDIS_URL', 'redis://redis:6379/')
 
 # Map Raw Redis List Names to Celery Task Paths and Queue Names
 # IMPORTANT: Ensure task paths ('code.jobs.module.function') and queue names match your setup
@@ -50,7 +58,7 @@ def run_watcher():
             # Ensure connection exists or reconnect
             if redis_client is None:
                  logging.info("Establishing Redis connection...")
-                 redis_client = redis.Redis.from_url(REDIS_URL, db=0, decode_responses=True) # Get strings from Redis
+                 redis_client = redis.Redis.from_url(REDIS_URL, db=REDIS_QUEUE_DB, decode_responses=True) # Get strings from Redis
                  redis_client.ping() # Verify connection
                  logging.info("Redis connection successful.")
 

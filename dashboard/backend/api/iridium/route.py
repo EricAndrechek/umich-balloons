@@ -1,11 +1,14 @@
 from fastapi import APIRouter, HTTPException, status, Depends, Header, Request
 
+from utils import ip
+
 from iridium.utils import verify_groundcontrol_jwt
 from iridium.models import IridiumMessage
 
 from redis_clients import get_redis_cache, get_redis_message_db
 from redis.asyncio.client import Redis
 
+from datetime import datetime, timezone
 import json
 
 router = APIRouter()
@@ -14,7 +17,7 @@ import logging
 log = logging.getLogger(__name__)
 
 @router.post(
-    "/rock7-upload",
+    "/iridium",
     status_code=status.HTTP_202_ACCEPTED,  # Use 202 Accepted for queuing
     summary="Queue Iridium Message for Processing",
 )
@@ -33,7 +36,7 @@ async def queue_iridium_message(
     try:
         # Pass the JWT string from the message to the verification function
         decoded_payload = verify_groundcontrol_jwt(message.JWT)
-        print("JWT Verification Successful!")
+        log.info("JWT Verification Successful!")
         # Optionally use claims from decoded_payload if needed
 
     except HTTPException as auth_exception:
@@ -51,16 +54,32 @@ async def queue_iridium_message(
         decoded_data = None
 
     # get ip address from the request
-    client_ip = x_forwarded_for if x_forwarded_for else request.client.host
+    client_ip = ip.get_ip(request, x_forwarded_for)
+    log.info(f"Client IP: {client_ip}")
+    log.info(f"Decoded Data: {decoded_data}")
 
-    redis_data = {
-        "sender": client_ip,
-        "payload": message,
-        "timestamp": datetime.utcnow().isoformat()
-    }
+    try:
+        redis_data = {
+            "sender": client_ip,
+            "payload": message.dict(),
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    except Exception as e:
+        log.error(f"Failed to create redis_data dictionary: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to create redis_data dictionary.",
+        )
 
-    # Push the message onto the Redis queue (even if data decoding fails)
-    queue_number = await message_queue.rpush("iridium", json.dumps(redis_data))
+    try:
+        # Push the message onto the Redis queue (even if data decoding fails)
+        queue_number = await message_queue.rpush("iridium", json.dumps(redis_data))
+    except Exception as e:
+        log.error(f"Failed to push message to Redis queue: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to push message to Redis queue.",
+        )
 
     # --- Return Response ---
     # should be accepted if the message is queued successfully
