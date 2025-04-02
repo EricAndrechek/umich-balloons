@@ -8,9 +8,13 @@ log = logging.getLogger(__name__)
 
 class RawMessage(BaseModel):
     """Model for raw Redis messages between services."""
-    sender: Optional[str] = Field(..., description="ID of device that relayed message to us. Defaults to IP address for HTTP events, client ID for MQTT events, and nothing for APRS events.")
+    sender: Optional[str] = Field(None, description="ID of device that relayed message to us. Defaults to IP address for HTTP events, client ID for MQTT events, and nothing for APRS events.")
+
     payload: Union[dict, str, bytes] = Field(..., description="Raw message payload. This is the raw data received from the device.")
+
     timestamp: Optional[datetime] = Field(default_factory=lambda: datetime.now(timezone.utc), description="Timestamp of the message. Should be as close to the original timestamp as possible, falling back to the current time if not available.")
+
+    ingest_method: Optional[str] = Field(None, description="Method of ingestion. This is the method used to send the message to the server. Can be HTTP, MQTT, or other.")
 
 class IridiumMessage(BaseModel):
     """Model for Iridium message."""

@@ -185,7 +185,7 @@ def get_payload_id(callsign: Callsign) -> int:
 # --- Raw Message Table Functions ---
 # -----------------------------------
 
-def upload_raw_message(raw_message: RawMessage, ingest_method: str, transmit_method: str, relay: Optional[str] = None) -> int:
+def upload_raw_message(raw_message: RawMessage, transmit_method: str, ingest_method: Optional[str] = None, relay: Optional[str] = None) -> int:
     """
     Upload a raw message to the database.
     Args:
@@ -216,7 +216,7 @@ def upload_raw_message(raw_message: RawMessage, ingest_method: str, transmit_met
     params = {
         'source_id': raw_message.sender,
         'raw_data': payload_str,
-        'ingest_method': ingest_method,
+        'ingest_method': ingest_method or raw_message.ingest_method,
         'transmit_method': transmit_method,
         'relay': relay or raw_message.sender
     }

@@ -104,7 +104,8 @@ def publish_to_redis(topic, payload):
             data = {
                 "sender": topic.split("/")[0],  # Split the topic into parts
                 "payload": payload,
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": datetime.utcnow().isoformat(),
+                "ingest_method": "MQTT",
             }
 
             # if the topic falls under the "+/status" wildcard, publish to the "status" channel
