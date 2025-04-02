@@ -57,6 +57,85 @@ create index if not exists payloads_id_idx
   using btree (id);
 
 -- ------------------------------
+-- --------- TELEMETRY  ---------
+-- ------------------------------
+
+-- One entry per telemetry message received from a payload
+-- This is the parsed data from the raw message deduplicated (so the same message from multiple sources is not duplicated)
+-- Unfortunately right now this parsing has to happen via the backend and not SQL, so we can't just use triggers
+create table if not exists public.telemetry (
+  id uuid not null default gen_random_uuid (),
+
+  -- references payloads.id
+  payload_id bigint not null,
+
+  -- data_time *should* be in data packet, but otherwise these are db-set only (cannot be set by the user):
+
+  -- timestamp of the last time this row was updated
+  last_updated timestamp with time zone not null default (now() AT TIME ZONE 'utc'::text),
+  -- timestamp of the first raw message's server_received_at
+  server_received_at timestamp with time zone not null default (now() AT TIME ZONE 'utc'::text),
+  -- earliest known timestamp data on the payload (could be included in the raw message or based on the first seen timestamp)
+  -- can be updated to be earlier (but not later) by subsequent telemetry messages
+  data_time timestamp with time zone not null,
+
+  -- actual packet data:
+
+  -- lat/long of the payload
+  position GEOGRAPHY(POINT,4326) not null,
+  -- optional accuracy of the position in meters
+  accuracy double precision null,
+  -- altitude in meters
+  altitude double precision null,
+  -- speed in meters per second
+  speed double precision null,
+  -- course in degrees
+  course double precision null,
+  -- battery in volts
+  battery double precision null,
+  -- extra telemetry data
+  extra jsonb null default '{}'::jsonb,
+  
+  constraint telemetry_pkey primary key (id),
+  constraint telemetry_payload_id_fkey foreign KEY (payload_id) references payloads (id) on update CASCADE on delete CASCADE,
+  constraint telemetry_payload_time_unique UNIQUE (payload_id, data_time)
+) TABLESPACE pg_default;
+
+-- Create a spatial index on position
+create index if not exists telemetry_position_idx
+  on public.telemetry
+  using GIST (position);
+
+-- sortable by message timestamp
+create index if not exists telemetry_data_time_idx
+  on public.telemetry
+  using btree (data_time);
+
+-- Trigger to update the last_updated timestamp on telemetry insert or update
+CREATE OR REPLACE FUNCTION update_last_updated()
+RETURNS TRIGGER 
+LANGUAGE plpgsql
+security definer
+set search_path = ''
+AS $$
+BEGIN
+  NEW.last_updated = NOW() AT TIME ZONE 'utc';
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER last_updated_trigger
+BEFORE INSERT OR UPDATE ON public.telemetry
+FOR EACH ROW
+EXECUTE FUNCTION update_last_updated();
+
+-- TODO: how to make index auto update?
+
+-- TODO: functions for querying telemetry data near a point (within x km) and for a given time range (on paths or points)
+-- https://supabase.com/docs/guides/database/extensions/postgis?queryGroups=database-method&database-method=sql&queryGroups=language&language=sql
+
+
+-- ------------------------------
 -- -------- RAW_MESSAGES --------
 -- ------------------------------
 
@@ -74,8 +153,6 @@ create table if not exists public.raw_messages (
   -- unique identifier for the message from the source (e.g., APRS gateway callsign, which ground station, etc) if any
   -- since this is done pre-parsing, it could be an IP address or anything really, just best effort from what we have
   source_id text null,
-  -- timestamp of the message from earliest unparsed source
-  data_time timestamp with time zone null,
 
   -- updated on insert to telemetry when relevant to this raw message:
   -- references a telemetry message by id
@@ -125,83 +202,17 @@ create index if not exists raw_messages_relay_idx
   on public.raw_messages
   using btree (relay);
 
--- ------------------------------
--- --------- TELEMETRY  ---------
--- ------------------------------
+-- most frequent sort is going to be by telemetry_id
+create index if not exists raw_messages_telemetry_id_idx
+  on public.raw_messages
+  using btree (telemetry_id);
 
--- One entry per telemetry message received from a payload
--- This is the parsed data from the raw message deduplicated (so the same message from multiple sources is not duplicated)
--- Unfortunately right now this parsing has to happen via the backend and not SQL, so we can't just use triggers
-create table if not exists public.telemetry (
-  id uuid not null default gen_random_uuid (),
+-- TODO: delete trigger or periodic cleanup job to delete telemetry 
+-- messages that are not referenced by any raw messages
 
-  -- references payloads.id
-  payload_id bigint not null,
+-- TODO: some sort of bad-data protection to prevent telemetry messages that
+-- are not referenced by >1(?) raw message from being visible in the UI if
+-- their location jumps over a time period (since last update) that is 
+-- improbably fast (ie > 1000 km/h)
 
-  -- data_time *should* be in data packet, but otherwise these are db-set only (cannot be set by the user):
-
-  -- timestamp of the last time this row was updated
-  last_updated timestamp with time zone not null default (now() AT TIME ZONE 'utc'::text),
-  -- timestamp of the first raw message's server_received_at
-  server_received_at timestamp with time zone not null default (now() AT TIME ZONE 'utc'::text),
-  -- earliest known timestamp data on the payload (could be included in the raw message or based on the first seen timestamp)
-  -- can be updated to be earlier (but not later) by subsequent telemetry messages
-  data_time timestamp with time zone null,
-
-  -- actual packet data:
-
-  -- lat/long of the payload
-  position GEOGRAPHY(POINT,4326) not null,
-  -- optional accuracy of the position in meters
-  accuracy double precision null,
-  -- altitude in meters
-  altitude double precision null,
-  -- speed in meters per second
-  speed double precision null,
-  -- course in degrees
-  course double precision null,
-  -- battery in volts
-  battery double precision null,
-  -- extra telemetry data
-  extra jsonb null default '{}'::jsonb,
-  
-  constraint telemetry_pkey primary key (id),
-  constraint telemetry_payload_id_fkey foreign KEY (payload_id) references payloads (id) on update CASCADE on delete CASCADE
-
-  -- TODO: delete telemetry messages when there are no raw messages left pointing to them
-
-) TABLESPACE pg_default;
-
--- Create a spatial index on position
-create index if not exists telemetry_position_idx
-  on public.telemetry
-  using GIST (position);
-
--- sortable by message timestamp
-create index if not exists telemetry_data_time_idx
-  on public.telemetry
-  using btree (data_time);
-
--- Trigger to update the last_updated timestamp on telemetry insert or update
-CREATE OR REPLACE FUNCTION update_last_updated()
-RETURNS TRIGGER 
-LANGUAGE plpgsql
-security definer
-set search_path = ''
-AS $$
-BEGIN
-  NEW.last_updated = NOW() AT TIME ZONE 'utc';
-  RETURN NEW;
-END;
-$$;
-
-CREATE TRIGGER last_updated_trigger
-BEFORE INSERT OR UPDATE ON public.telemetry
-FOR EACH ROW
-EXECUTE FUNCTION update_last_updated();
-
--- TODO: how to make index auto update?
-
--- TODO: functions for querying telemetry data near a point (within x km) and for a given time range (on paths or points)
--- https://supabase.com/docs/guides/database/extensions/postgis?queryGroups=database-method&database-method=sql&queryGroups=language&language=sql
-
+-- TODO: delete or hidden fields for all tables

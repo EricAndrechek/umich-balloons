@@ -1,6 +1,6 @@
 import json
 import re
-from typing import Optional, Union, Any, Literal
+from typing import Optional, Union, Any, Literal, Dict, List, Set
 from pydantic import (
     BaseModel,
     Field,
@@ -128,6 +128,7 @@ def parse_coordinate(value: Union[str, int, float], coord_type: Literal['lat', '
     if not (min_val <= decimal_degrees <= max_val):
         raise ValueError(f"Coordinate {decimal_degrees:.6f} out of bounds ({min_val} to {max_val})")
 
+    log.debug(f"Parsed {coord_type.upper()} coordinate: {decimal_degrees:.6f} from value '{value}'")
     return decimal_degrees
 
 def normalize_voltage(value: Any) -> Optional[float]:
@@ -154,6 +155,7 @@ def normalize_voltage(value: Any) -> Optional[float]:
     # 1. Check for likely Millivolts (mV)
     # Using 1000 as a threshold is generally safe.
     if v_float > 1000.0:
+        log.debug(f"Assuming voltage '{v_float}' is in mV. Converting to Volts: {v_float / 1000.0:.2f}V")
         return v_float / 1000.0
 
     # 2. Heuristic: Check for integers likely representing Volts * 10
@@ -162,7 +164,7 @@ def normalize_voltage(value: Any) -> Optional[float]:
     # Adjust range [20, 60] based on your expected device voltage ranges if needed.
     if isinstance(value, int) and 20 <= value <= 60:
         # Issue a warning as this is a heuristic guess
-        warnings.warn(f"Assuming integer voltage '{value}' is scaled (V*10). Interpreting as {value / 10.0:.2f}V.", UserWarning)
+        log.warning(f"Assuming integer voltage '{value}' is scaled (V*10). Interpreting as {value / 10.0:.2f}V.")
         return float(value) / 10.0
 
     # 3. Assume Direct Volts
@@ -172,7 +174,8 @@ def normalize_voltage(value: Any) -> Optional[float]:
     # - Integers above the V*10 range but below the mV range (e.g., 100)
     # - Integers within the V*10 range *if* the heuristic (rule 2) is removed/modified.
     if v_float > 60.0: # If it wasn't mV (>1000) but is still high (e.g. 100)
-         warnings.warn(f"Voltage '{v_float}' seems high but not mV range. Interpreting directly as Volts.", UserWarning)
+         log.warning(f"Voltage '{v_float}' seems high but not mV range. Interpreting directly as Volts.")
 
+    log.debug(f"Returning normalized voltage: {v_float:.2f}V")
     return v_float # Return as float
 

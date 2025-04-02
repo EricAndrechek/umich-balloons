@@ -61,14 +61,14 @@ async def queue_iridium_message(
     try:
         redis_data = {
             "sender": client_ip,
-            "payload": message.dict(),
-            "timestamp": datetime.utcnow().isoformat()
+            "payload": message.model_dump(mode='json'),
+            "timestamp": message.model_dump(mode='json')["transmit_time"],
         }
     except Exception as e:
         log.error(f"Failed to create redis_data dictionary: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to create redis_data dictionary.",
+            detail="Failed to create redis_data dictionary. Error: " + str(e),
         )
 
     try:
@@ -78,7 +78,7 @@ async def queue_iridium_message(
         log.error(f"Failed to push message to Redis queue: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to push message to Redis queue.",
+            detail="Failed to push message to Redis queue. Error: " + str(e),
         )
 
     # --- Return Response ---

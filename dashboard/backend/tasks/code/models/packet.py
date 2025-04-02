@@ -56,6 +56,13 @@ class ParsedPacket(BaseModel):
     # extra telemtry data (ideally JSON, but allow unparsed compressed data like in APRS telemetry packets)
     extra: Dict[str, Any] = Field(default_factory=dict, description="Extra telemetry data. This is a catch-all for any additional data that doesn't fit into the other fields. It will attempt to be treated as a JSON/dictionary object but will accept unparsed compressed data.", validation_alias=AliasChoices('extra', 'telem', 'telemetry'))
 
+    # --- Optional Fields ---
+    data_time: Optional[datetime] = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        description="Timestamp of the message. Should be as close to the original timestamp as possible, falling back to the current time if not available.",
+        validation_alias=AliasChoices('timestamp', 'time', 'datetime', 'dt', 'date_time', 'data_time')
+    )
+
     model_config = {
         "populate_by_name": True,
         # Allows using aliases not just for validation but for population

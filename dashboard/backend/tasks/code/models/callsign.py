@@ -1,74 +1,109 @@
-# pydantic custom type for callsigns to validate the format
-
-from pydantic import BaseModel, Field, constr
-from typing import Optional, Union
-
+import string
 import logging
+from typing import Optional, Union, Any
+
+# Assume log setup elsewhere if needed
 log = logging.getLogger(__name__)
 
 class Callsign(str):
     """
-    Pydantic custom type for callsigns to validate the format.
-    Callsigns must be 1-6 characters long, alphanumeric, and start with a letter.
+    Pydantic custom type for callsigns based on APRS format conventions.
+
+    Validates format: BASE-SSID where:
+      - BASE is 3-6 characters, starts with a letter, alphanumeric.
+      - SSID is optional, 1-2 characters, alphanumeric.
+      - If SSID is numeric, it must be 1-15.
+    Normalizes the callsign to uppercase.
     """
+    # Max length allowed for the whole string (e.g., BASE(6) + HYPHEN(1) + SSID(2) = 9)
+    max_total_length = 9
+    min_base_length = 3
+    max_base_length = 6
+    min_ssid_length = 1
+    max_ssid_length = 2
+
     @classmethod
     def __get_validators__(cls):
-        yield cls.validate
+        """Yields the validation methods for Pydantic."""
+        yield cls.validate_callsign_format
 
     @classmethod
-    def validate(cls, value: str) -> str:
+    def validate_callsign_format(cls, value: Any) -> 'Callsign':
+        """Performs the actual validation and normalization."""
         if not isinstance(value, str):
-            raise TypeError('Calls sign must be a string')
-        if len(value) > 9:
-            raise ValueError('Calls sign must be 3-6 characters long with an optional SSID')
-        if not value[0].isalpha():
-            raise ValueError('Calls sign must start with a letter')
+            raise TypeError('Callsign must be a string')
 
-        callsign = value.upper()  # Normalize to uppercase
-        
-        base_callsign = callsign
+        callsign_upper = value.upper()  # Normalize to uppercase early
+
+        if not callsign_upper:
+             raise ValueError('Callsign cannot be empty')
+
+        if len(callsign_upper) > cls.max_total_length:
+            raise ValueError(f"Callsign '{value}' exceeds maximum length of {cls.max_total_length} characters.")
+
+        if not callsign_upper[0].isalpha():
+            raise ValueError(f"Callsign '{value}' must start with a letter.")
+
+        base_callsign = callsign_upper
         ssid_part = None
 
-        if '-' in value:
-            parts = value.split('-', 1)
-            if len(parts) != 2 or not parts[0] or not parts[1]:
-            raise ValueError(f"Validation Failed (Callsign Format): '{callsign}' has invalid hyphen usage or empty parts.")
-        
-        base_callsign = parts[0]
-        ssid_part = parts[1]
+        if '-' in callsign_upper:
+            parts = callsign_upper.split('-', 1)
+            # Ensure only one hyphen and non-empty parts if hyphen exists
+            if len(parts) != 2 or not parts[0] or not parts[1] or '-' in parts[1]:
+                 raise ValueError(f"Callsign '{value}' has invalid hyphen usage or empty parts.")
+            base_callsign = parts[0]
+            ssid_part = parts[1]
 
-        # Rule: Minimum base callsign length (min 3)
-        if len(base_callsign) < 3:
-            raise ValueError(f"Validation Failed (Base Callsign Length): Base callsign '{base_callsign}' (from '{callsign}') must be at least 3 characters long.")
+        # --- Base Callsign Validation ---
+        # Rule: Base callsign length (min/max)
+        if not (cls.min_base_length <= len(base_callsign) <= cls.max_base_length):
+            raise ValueError(f"Base callsign '{base_callsign}' (from '{value}') must be {cls.min_base_length}-{cls.max_base_length} characters long.")
 
         # Rule: Base callsign characters (alphanumeric ASCII)
-        # Allow A-Z, a-z, 0-9
-        valid_base_chars = string.ascii_letters + string.digits
+        valid_base_chars = string.ascii_uppercase + string.digits # Already uppercase
         if not all(c in valid_base_chars for c in base_callsign):
-            raise ValueError(f"Validation Failed (Base Callsign Chars): Base callsign '{base_callsign}' (from '{callsign}') contains non-alphanumeric ASCII characters.")
+            raise ValueError(f"Base callsign '{base_callsign}' (from '{value}') contains non-alphanumeric characters.")
 
         # --- SSID Validation (only if SSID part exists) ---
         if ssid_part is not None:
-            # Rule: SSID length (1 or 2 characters)
-            if not (1 <= len(ssid_part) <= 2):
-                raise ValueError (f"Validation Failed (SSID Length): SSID '-{ssid_part}' (from '{callsign}') must be 1 or 2 characters long.")
+            # Rule: SSID length
+            if not (cls.min_ssid_length <= len(ssid_part) <= cls.max_ssid_length):
+                raise ValueError(f"SSID '-{ssid_part}' (from '{value}') must be {cls.min_ssid_length}-{cls.max_ssid_length} characters long.")
 
             # Rule: SSID characters (alphanumeric ASCII)
-            valid_ssid_chars = string.ascii_letters + string.digits
+            valid_ssid_chars = string.ascii_uppercase + string.digits # Already uppercase
             if not all(c in valid_ssid_chars for c in ssid_part):
-                raise ValueError(f"Validation Failed (SSID Chars): SSID '-{ssid_part}' (from '{callsign}') contains non-alphanumeric ASCII characters.")
+                raise ValueError(f"SSID '-{ssid_part}' (from '{value}') contains non-alphanumeric characters.")
 
-            # Rule: SSID must be numeric (0-15) if transmitting
-            # (can't be 0, so check if 1-15)
+            # Rule: Check numeric SSID range if it's purely digits
             if ssid_part.isdigit():
                 ssid_value = int(ssid_part)
-                if ssid_value < 1 or ssid_value > 15:
-                    raise ValueError(f"Validation Failed (SSID Value): SSID '-{ssid_part}' (from '{callsign}') must be a numeric value between 1 and 15 if transmitting to APRS-IS.")
-            else:
-                raise ValueError(f"Validation Warning (SSID Non-numeric): SSID '-{ssid_part}' (from '{callsign}') is non-numeric. Numeric SSIDs are preferred and are required if transmitting to APRS-IS.")
+                # Standard numeric SSIDs are 1-15
+                if not (1 <= ssid_value <= 15):
+                    raise ValueError(f"Numeric SSID '-{ssid_part}' (from '{value}') must be between 1 and 15.")
+            # else:
+                # Non-numeric SSIDs are allowed by this validation logic
+                # log.debug(f"Non-numeric SSID '-{ssid_part}' accepted for callsign '{value}'.")
+                # pass # Explicitly allow non-numeric SSIDs like -T, -PS etc.
 
-            # Rule: SSID must not be explicitly 0
-            if ssid_part == "0":
-                raise ValueError(f"Validation Failed (SSID Value): Explicit SSID '-0' (from '{callsign}') is not allowed.")
-    
-    
+        # If all checks pass, return the normalized, validated string
+        # as an instance of the Callsign class.
+        return cls(callsign_upper) # Instantiate cls with the validated string
+
+    # Optional: Add __modify_schema__ for OpenAPI/JSON Schema generation (Pydantic V1 style)
+    # or __get_pydantic_core_schema__ (Pydantic V2 style) if needed,
+    # for example to add a regex pattern hint.
+    # For basic validation, this is often not strictly necessary.
+
+    # Example V2 Core Schema (optional enhancement)
+    @classmethod
+    def __get_pydantic_core_schema__(cls, source_type: Any, handler):
+         from pydantic_core import core_schema
+         # Start with a basic string schema
+         string_schema = core_schema.str_schema(max_length=cls.max_total_length)
+         # Add our custom validation logic
+         return core_schema.no_info_plain_validator_function(
+             cls.validate_callsign_format,
+             serialization=core_schema.to_string_ser_schema(), # How to serialize it
+         )
