@@ -104,11 +104,16 @@ def process_iridium(self, raw_data_item):
     # check if the internal data_time field is before or after the raw_message timestamp
     # past < present == True
     # if (what should be the past) is after (what should be the present)
-    if parsed_payload.data_time > raw_message.timestamp:
-        # this is a problem, we need to fix it
-        # set parsed_payload.data_time to the raw_message timestamp
-        parsed_payload.data_time = raw_message.timestamp
-        logger.warning(f"Adjusted parsed_payload.data_time to match raw_message.timestamp: {parsed_payload.data_time}")
+    try:
+        if parsed_payload.data_time > raw_message.timestamp:
+            # this is a problem, we need to fix it
+            # set parsed_payload.data_time to the raw_message timestamp
+            parsed_payload.data_time = raw_message.timestamp
+            logger.warning(f"Adjusted parsed_payload.data_time to match raw_message.timestamp: {parsed_payload.data_time}")
+    except TypeError as e:
+        logger.error(f"Type error while comparing timestamps: {e}")
+        # this likely means the timestamps are not comparable (eg one is timezone aware and the other is not)
+        # TODO: handle this case
     
     # upload the parsed payload to the database (or confirm it exists/verify it)
     

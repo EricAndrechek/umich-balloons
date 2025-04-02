@@ -42,6 +42,7 @@ async def queue_aprs_message(
             "sender": message.sender if message.sender else client_ip,
             "payload": message.model_dump(mode='json')["raw_data"],
             "timestamp": message.model_dump(mode='json')["timestamp"],
+            "ingest_method": "HTTP",
         }
     except Exception as e:
         log.error(f"Failed to create redis_data dictionary: {e}")
