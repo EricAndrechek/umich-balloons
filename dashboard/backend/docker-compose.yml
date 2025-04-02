@@ -151,11 +151,11 @@ services:
       - postgres
       - redis
     environment:
-      - ENV_LOG_LEVEL=INFO
+      - LOG_LEVEL=DEBUG
       - REDIS_URL=${REDIS_URL}
       - REDIS_QUEUE_DB=0
       - REDIS_CACHE_DB=1
-      - ENV_CELERY_CONCURRENCY=4
+      - CELERY_CONCURRENCY=4
       - TZ=America/Detroit
 
       - DATABASE_URL=${DATABASE_URL}

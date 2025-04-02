@@ -7,11 +7,14 @@ from ..celery import app
 from ..helpers import db
 
 from pydantic import ValidationError
-from ..models.raw_messages import RawMessage
-from ..models.packet import Packet, process_json_msg
+from ..models.raw_messages import RawMessage, IridiumMessage
+from ..models.packet import ParsedPacket, process_json_msg
 
 import time
-import json # If your raw data is JSON
+import json
+from datetime import datetime, timezone
+from typing import Optional, Union
+import uuid
 
 # Define constants for clarity (match with watcher.py and celery.py queue defs)
 IRIDIUM_RAW_LIST = 'iridium'  # The Redis list the watcher monitors
@@ -39,35 +42,112 @@ def process_iridium(self, raw_data_item):
         raise e
     
     # Now we have a RawMessage object and can process the payload according to Iridium
-    
     # no matter what, the 'payload' field should be uploaded to the database raw messages table
-    # TODO: where do we use 'transmit_time'?
+    # note: this automatically handles transmit_time from iridium
+    raw_msg_id = db.upload_raw_message(raw_message, ingest_method='HTTP', transmit_method='Iridium')
+
+    # try to parse the Iridium payload
+    try:
+        if isinstance(raw_message.payload, dict):
+            logger.debug(f"Payload is a dict, attempting to decode: {raw_message.payload}")
+            iridium_message = IridiumMessage.model_validate(raw_message.payload)
+        elif isinstance(raw_message.payload, str):
+            # If payload is a string, we need to decode it first
+            logger.debug(f"Payload is a string, attempting to decode: {raw_message.payload}")
+            iridium_message = IridiumMessage.model_validate(json.loads(raw_message.payload))
+        else:
+            logger.warning(f"Unexpected payload type: {type(raw_message.payload)}, attempting to decode?")
+            iridium_message = IridiumMessage.model_validate(raw_message.payload)
+        
+        logger.debug(f"Parsed IridiumMessage: {iridium_message}")
+    except ValidationError as e:
+        logger.error(f"Validation error for IridiumMessage: {e}")
+        # Handle the error or log it as needed
+        raise e
+    except Exception as e:
+        logger.error(f"Unexpected error while parsing payload: {e}")
+        raise e
+    
+    # now process the 'data' field of the IridiumMessage
+    logger.debug(f"Processing data field: {iridium_message.data}")
+    # Assuming the data field is a hex string, we can decode it
+    try:
+        # Decode the hex string to bytes
+        data_bytes = bytes.fromhex(iridium_message.data)
+        decoded_data = data_bytes.decode('utf-8')
+        parsed_data = json.loads(decoded_data)
+
+        logger.debug(f"Parsed data: {parsed_data}")
+    except json.JSONDecodeError as e:
+        logger.error(f"Failed to decode JSON data: {e}")
+        raise e
+    except Exception as e:
+        logger.error(f"Unexpected error while processing data: {e}")
+        raise e
 
     # now we try to parse the payload as JSON
     parsed_payload = None
     try:
-        parsed_payload = json.loads(raw_message.payload)
+        parsed_payload = process_json_msg(parsed_data)
         logger.debug(f"Parsed payload: {parsed_payload}")
     except json.JSONDecodeError as e:
         logger.error(f"Failed to decode JSON payload: {e}")
-        # Handle the error or log it as needed
+        raise e
     except Exception as e:
         logger.error(f"Unexpected error while parsing payload: {e}")
-        # Handle the error or log it as needed
+        raise e
     
     # get the payload ID from the database
-    payload_id = get_payload_id(parsed_payload.callsign)
+    payload_id = db.get_payload_id(parsed_payload.callsign)
+    logger.info(f"Payload ID retrieved: {payload_id}")
+
+    # check if the internal data_time field is before or after the raw_message timestamp
+    # past < present == True
+    # if (what should be the past) is after (what should be the present)
+    if parsed_payload.data_time > raw_message.timestamp:
+        # this is a problem, we need to fix it
+        # set parsed_payload.data_time to the raw_message timestamp
+        parsed_payload.data_time = raw_message.timestamp
+        logger.warning(f"Adjusted parsed_payload.data_time to match raw_message.timestamp: {parsed_payload.data_time}")
     
-    # now we can compare the sender and timestamp we had from the raw message
-    # with the parsed payload and work out which one was earliest and who we
-    # should keep as the relay sender
-    # TODO
+    # upload the parsed payload to the database (or confirm it exists/verify it)
+    
+    try:
+        telemetry_id, was_inserted = db.upload_telemetry(telemetry=parsed_payload, payload_id=payload_id)
+        logger.info(f"Telemetry uploaded successfully with ID: {telemetry_id}")
+    except Exception as e:
+        logger.error(f"Error uploading telemetry: {e}")
+        raise e
 
-    # now we can upload the parsed payload to the database
-    # TODO
+    if was_inserted:
+        # TODO: trigger a task to let the broadcasters know about the new telemetry
+        logger.info(f"New telemetry inserted with ID: {telemetry_id}")
 
-    # and associate it with the raw message
-    # TODO
+    try:
+        # update raw message with telemetry ID and some parsed data fields, include:
+        # - source_id = parsed_payload.callsign
+        # - data_time = parsed_payload.data_time
+        # - telemetry_id = telemetry_id
+        # - sources = [parsed_payload.callsign, iridium_message.serial] || sources
+        # - relay = iridium_message.serial
+        sql_query = """
+        UPDATE raw_messages
+        SET source_id = :source_id,
+            telemetry_id = :telemetry_id,
+            sources = ARRAY[:source_id, :serial] || sources,
+            relay = :serial
+        WHERE id = :raw_msg_id;
+        """
+        params = {
+            'source_id': parsed_payload.callsign,
+            'telemetry_id': telemetry_id,
+            'serial': str(iridium_message.serial),
+            'raw_msg_id': raw_msg_id
+        }
+        db.execute_update(sql_query, params)
+        logger.info(f"Raw message {raw_msg_id} updated successfully.")
+    except Exception as e:
+        logger.error(f"Error updating raw message: {e}")
+        raise e
 
-    # updating the raw message as needed
-    # TODO
+    return telemetry_id

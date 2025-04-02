@@ -7,7 +7,8 @@ WORKDIR /app
 # Set environment variables
 ENV PYTHONDONTWRITEBYTECODE 1
 ENV PYTHONUNBUFFERED 1
-# Define defaults, can be overridden in docker-compose.yml
+
+# --- Define defaults, can be overridden in docker-compose.yml ---
 ENV REDIS_URL=redis://redis:6379/0
 
 ENV CELERY_BROKER_URL=${REDIS_URL}
@@ -15,6 +16,7 @@ ENV CELERY_RESULT_BACKEND=${REDIS_URL}
 
 ENV LOG_LEVEL=INFO
 ENV CELERY_CONCURRENCY=4
+# --- End of defaults ---
 
 # RENAME LOG_LEVEL to ENV_LOG_LEVEL
 ENV ENV_LOG_LEVEL=LOG_LEVEL

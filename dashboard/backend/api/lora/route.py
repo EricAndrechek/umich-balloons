@@ -40,8 +40,8 @@ async def queue_lora_message(
     try:
         redis_data = {
             "sender": message.sender if message.sender else client_ip,
-            "payload": message.raw_data,
-            "timestamp": message.timestamp.isoformat() if message.timestamp else datetime.now(timezone.utc).isoformat()
+            "payload": message.model_dump(mode='json')["raw_data"],
+            "timestamp": message.model_dump(mode='json')["timestamp"]
         }
     except Exception as e:
         log.error(f"Failed to create redis_data dictionary: {e}")
