@@ -7,3 +7,4 @@ sqlalchemy>=1.4     # SQL toolkit
 psycopg2-binary     # PostgreSQL database adapter
 # Add any libraries needed by your *task* code (e.g., requests, numpy, etc.)
 aprspy              # APRS message parser
+h3                  # H3 geospatial indexing

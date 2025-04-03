@@ -1,7 +1,11 @@
-fastapi>=0.100.0
-uvicorn[standard]>=0.20.0
-redis>=5.0.0
+fastapi
+uvicorn[standard]       # Includes websockets, httptools, etc.
+asyncpg                 # Async PostgreSQL driver
+redis[hiredis]>=5.0.0   # Async support needs v4.2+ or v5+, hiredis optional boost
 pydantic>=2.0.0
-python-dotenv>=1.0.0
+python-dotenv
+
 python-jose
 cryptography
+aprspy
+h3

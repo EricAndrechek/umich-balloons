@@ -10,6 +10,8 @@ from pydantic import ValidationError
 from ..models.raw_messages import RawMessage, IridiumMessage
 from ..models.packet import ParsedPacket, process_json_msg
 
+from ..jobs.broadcast import publish_telemetry
+
 import time
 import json
 from datetime import datetime, timezone
@@ -125,7 +127,14 @@ def process_iridium(self, raw_data_item):
         raise e
 
     if was_inserted:
-        # TODO: trigger a task to let the broadcasters know about the new telemetry
+        update_packet = {
+            'telemetry_id': str(telemetry_id),
+            'payload_id': str(payload_id),
+            'lon': parsed_payload.longitude,
+            'lat': parsed_payload.latitude,
+            'ts': parsed_payload.data_time.isoformat(),
+        }
+        publish_telemetry.delay(update_packet)
         logger.info(f"New telemetry inserted with ID: {telemetry_id}")
 
     try:
