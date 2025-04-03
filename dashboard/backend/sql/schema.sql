@@ -216,3 +216,66 @@ create index if not exists raw_messages_telemetry_id_idx
 -- improbably fast (ie > 1000 km/h)
 
 -- TODO: delete or hidden fields for all tables
+
+-- -------------------------------------
+-- ---- MATERIALIZED PATH SEGMENTS -----
+-- -------------------------------------
+CREATE MATERIALIZED VIEW IF NOT EXISTS public.mv_payload_path_segments AS
+WITH recent_telemetry AS (
+  SELECT
+    payload_id,
+    data_time,
+    position -- Keep as geography here
+  FROM public.telemetry
+  WHERE data_time >= NOW() AT TIME ZONE 'utc' - INTERVAL '1 day'
+)
+SELECT
+  rt.payload_id,
+  date_trunc('hour', rt.data_time) AS time_bucket_start,
+
+  -- --- CORRECTED VERSION (Non-Simplified) ---
+  -- 1. Cast position to geometry WITHIN the aggregate function
+  -- 2. Aggregate using ST_MakeLine (which now gets geometry)
+  -- 3. Cast the resulting LineString geometry back to geography
+  ST_MakeLine(rt.position::geometry ORDER BY rt.data_time ASC)::geography AS path_segment,
+  -- --- END CORRECTION ---
+
+  /* --- Optional Simplified Version (This looked correct already) ---
+  ST_Simplify(
+      ST_MakeLine(rt.position::geometry ORDER BY rt.data_time ASC), -- Cast input to geometry
+      10 -- Tolerance in meters
+  )::geography AS path_segment, -- Cast simplified result back to geography
+  --- End Simplified Version --- */
+
+  min(rt.data_time) AS segment_start_time,
+  max(rt.data_time) AS segment_end_time,
+  count(*) AS point_count
+FROM recent_telemetry rt
+GROUP BY
+  rt.payload_id,
+  time_bucket_start
+HAVING
+  count(*) >= 2 -- ST_MakeLine needs at least 2 points
+WITH DATA;
+
+-- --- Indexes for the Materialized View ---
+
+-- Index for filtering by payload and time bucket
+CREATE INDEX IF NOT EXISTS mv_payload_path_segments_payload_time_idx
+  ON public.mv_payload_path_segments (payload_id, time_bucket_start DESC);
+
+-- Spatial index for intersection queries
+CREATE INDEX IF NOT EXISTS mv_payload_path_segments_segment_gist_idx
+  ON public.mv_payload_path_segments USING GIST (path_segment);
+
+-- Optional: Unique index needed for CONCURRENTLY refresh (if desired and applicable)
+CREATE UNIQUE INDEX IF NOT EXISTS mv_payload_path_segments_unique_idx
+ ON public.mv_payload_path_segments (payload_id, time_bucket_start);
+
+-- --- Refreshing the Materialized View ---
+
+-- To update the view periodically (e.g., via cron or pg_cron):
+-- REFRESH MATERIALIZED VIEW public.mv_payload_path_segments;
+
+-- For less locking during refresh (requires a UNIQUE index, see above):
+-- REFRESH MATERIALIZED VIEW CONCURRENTLY public.mv_payload_path_segments;

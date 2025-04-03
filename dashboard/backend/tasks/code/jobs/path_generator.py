@@ -1,9 +1,20 @@
-from ..celery import app
 import logging
+logger = logging.getLogger(__name__)
+
+# Use relative import to get the app instance from celery.py in the parent directory
+from ..celery import app
+
+from ..helpers import db
+
+from pydantic import ValidationError
+from ..models.raw_messages import RawMessage
+from ..models.packet import ParsedPacket, process_json_msg
+
 import time
 import json
-
-logger = logging.getLogger(__name__)
+from datetime import datetime, timezone
+from typing import Optional, Union
+import uuid
 
 PATH_GEN_QUEUE = 'queue_path_gen'
 
@@ -17,14 +28,13 @@ def run_scheduled_path_generation(self, *args, **kwargs):
     logger.info(f"Running SCHEDULED path generation. Task ID: {self.request.id}")
     logger.debug(f"Scheduled run args: {args}, kwargs: {kwargs}")
     try:
-        # --- Add logic for scheduled prediction ---
-        # Example: Predict for all active flights, query a database, etc.
-        logger.info("Performing scheduled prediction calculations...")
-        time.sleep(10) # Simulate work
-        result = "Scheduled prediction batch completed."
-        # --- End scheduled prediction logic ---
+        # connect to db and run
+        # REFRESH MATERIALIZED VIEW CONCURRENTLY public.mv_payload_path_segments;
 
-        logger.info("Scheduled flight prediction finished successfully.")
+        db.refresh_materialized_view('mv_payload_path_segments')
+        result = "Materialized view refreshed successfully."
+        logger.info(result)
+        
         return result
     except Exception as e:
         logger.error(f"Error during scheduled flight prediction: {e}", exc_info=True)

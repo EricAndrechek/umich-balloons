@@ -9,26 +9,8 @@ services:
       - ./nginx/app.conf:/etc/nginx/conf.d/app.conf:ro
       - nginx_logs:/var/log/nginx
     depends_on:
-      websocket-broadcaster:
-        condition: service_started
-        # TODO: could remove websocket-broadcaster maybe so that can keep working if websocket-broadcaster is down
       api:
         condition: service_healthy
-    networks:
-      - balloon_net
-    restart: unless-stopped
-
-  # Node.js Application
-  websocket-broadcaster:
-    build: ./websockets
-    container_name: websocket-broadcaster
-    depends_on:
-      redis:
-        condition: service_started
-    environment:
-      - NODE_ENV=production
-      - HTTP_PORT=3000
-      - REDIS_URL=${REDIS_URL}
     networks:
       - balloon_net
     restart: unless-stopped
@@ -42,13 +24,23 @@ services:
       redis:
         condition: service_started
     environment:
-      - DATABASE_URL=${DATABASE_URL}
+      - LOG_LEVEL=DEBUG
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_USERNAME=${POSTGRES_USERNAME}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_HOST=${POSTGRES_HOST}
+      - POSTGRES_PORT=${POSTGRES_PORT}
+      - DB_POOL_MIN_SIZE=1
+      - DB_POOL_MAX_SIZE=10
+      
       - REDIS_URL=${REDIS_URL}
+      - REDIS_QUEUE_DB=${REDIS_QUEUE_DB}
+      - REDIS_CACHE_DB=${REDIS_CACHE_DB}
     networks:
       - balloon_net
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -60,7 +52,7 @@ services:
     container_name: postgres
     restart: unless-stopped
     environment:
-      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_USER=${POSTGRES_USERNAME}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - POSTGRES_DB=${POSTGRES_DB}
     volumes:
@@ -136,6 +128,9 @@ services:
       - redis
     environment:
       - REDIS_URL=${REDIS_URL}
+      - REDIS_QUEUE_DB=${REDIS_QUEUE_DB}
+      - REDIS_CACHE_DB=${REDIS_CACHE_DB}
+
       - MQTT_BROKER_HOST=mosquitto # Service name
       - MQTT_BROKER_PORT=1883
       - MQTT_BRIDGE_USERNAME=${MQTT_BRIDGE_USERNAME} # Load from .env
@@ -151,14 +146,18 @@ services:
       - postgres
       - redis
     environment:
-      - LOG_LEVEL=DEBUG
+      - LOG_LEVEL=INFO
       - REDIS_URL=${REDIS_URL}
       - REDIS_QUEUE_DB=0
       - REDIS_CACHE_DB=1
       - CELERY_CONCURRENCY=4
       - TZ=America/Detroit
 
-      - DATABASE_URL=${DATABASE_URL}
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_USERNAME=${POSTGRES_USERNAME}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_HOST=${POSTGRES_HOST}
+      - POSTGRES_PORT=${POSTGRES_PORT}
       # adjust to keep max connections >> (concurrency * number_of_app_replicas * (pool_size + max_overflow))
       - DB_POOL_SIZE=5                # Max persistent connections per worker process pool
       - DB_MAX_OVERFLOW=2             # Max extra temp connections per worker process pool
@@ -182,6 +181,8 @@ services:
       - "5555:5555"
     environment:
       - REDIS_URL=${REDIS_URL}
+      - REDIS_QUEUE_DB=${REDIS_QUEUE_DB}
+      - REDIS_CACHE_DB=${REDIS_CACHE_DB}
     depends_on:
       - redis
       # - tasks # can wait for tasks but can boot before that

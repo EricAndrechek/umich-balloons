@@ -11,6 +11,8 @@ function checkAcl(username, topic, clientid, acc) {
     }
 
     if (username === "N0CALL") {
+        return false; // deny access to all topics for N0CALL
+
         // allow read-only access to all topics for N0CALL
         if (acc === 1 || acc === 4) {
             return true;

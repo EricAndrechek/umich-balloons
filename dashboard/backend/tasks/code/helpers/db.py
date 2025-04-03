@@ -18,6 +18,14 @@ from ..models.raw_messages import RawMessage
 
 logger = logging.getLogger(__name__)
 
+POSTGRES_DB = os.getenv("POSTGRES_DB", "mydatabase")
+POSTGRES_USERNAME = os.getenv("POSTGRES_USERNAME", "myuser")
+POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "mypassword")
+POSTGRES_HOST = os.getenv("POSTGRES_HOST", "localhost")
+POSTGRES_PORT = int(os.getenv("POSTGRES_PORT", 5432))
+
+DATABASE_URL = f"postgresql://{POSTGRES_USERNAME}:{POSTGRES_PASSWORD}@{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}"
+
 # This global variable will hold the engine instance *per process*.
 _engine = None
 
@@ -29,11 +37,6 @@ def get_engine():
     """
     global _engine
     if _engine is None:
-        db_url = os.environ.get('DATABASE_URL')
-        if not db_url:
-            logger.critical("DATABASE_URL environment variable is not set!")
-            raise ValueError("DATABASE_URL is required for database operations.")
-
         # --- Pool Configuration (Read from Environment Variables) ---
         # Calculate total connections: workers * concurrency * (pool_size + max_overflow)
         # Ensure this total doesn't exceed postgres max_connections.
@@ -45,14 +48,14 @@ def get_engine():
         pid = os.getpid()
         logger.info(
             f"[DB Init PID:{pid}] Initializing DB engine. "
-            f"URL: {db_url.split('@')[-1]}, " # Log DB host/db without creds
+            f"URL: {DATABASE_URL.split('@')[-1]}, " # Log DB host/db without creds
             f"Pool Size: {pool_size}, Max Overflow: {max_overflow}, "
             f"Recycle (s): {pool_recycle_seconds}"
         )
 
         try:
             _engine = create_engine(
-                db_url,
+                DATABASE_URL,
                 poolclass=QueuePool,      # Explicitly select pool type (optional, usually default)
                 pool_size=pool_size,      # Max persistent connections per pool/process
                 max_overflow=max_overflow,# Max temporary overflow connections per pool/process
@@ -343,6 +346,13 @@ def upload_telemetry(telemetry: ParsedPacket, payload_id: int) -> tuple[uuid.UUI
             if isinstance(telemetry_id, uuid.UUID):
                 # xmax = 0 indicates the row was newly inserted by this transaction
                 # xmax != 0 indicates the row existed and was potentially updated (or just locked) by this transaction
+                if xmax_val is not None:
+                    # Check if xmax is an integer (or can be converted to one)
+                    try:
+                        xmax_val = int(xmax_val)
+                    except ValueError:
+                        logger.error(f"Unexpected xmax value type: {type(xmax_val)} for telemetry ID: {telemetry_id}")
+                        raise
                 was_inserted = (xmax_val == 0)
                 action = "inserted" if was_inserted else "updated/found"
                 logger.info(f"Telemetry {action}. ID: {telemetry_id} for payload {payload_id} (xmax={xmax_val})")
@@ -370,4 +380,26 @@ def upload_telemetry(telemetry: ParsedPacket, payload_id: int) -> tuple[uuid.UUI
         raise
     except Exception as e:
         logger.error(f"Unexpected error during telemetry upsert for payload {payload_id}: {e}", exc_info=True)
+        raise
+
+# ---------------------------------
+# --- Materialized View Functions ---
+# ---------------------------------
+
+def refresh_materialized_view(view_name: str):
+    """
+    Refresh a materialized view in the
+    database.
+    Args:
+        view_name (str): The name of the materialized view to refresh.
+    """
+    sql_query = f"REFRESH MATERIALIZED VIEW CONCURRENTLY {view_name};"
+    try:
+        execute_update(sql_query)
+        logger.info(f"Materialized view {view_name} refreshed successfully.")
+    except SQLAlchemyError as e:
+        logger.error(f"Failed to refresh materialized view {view_name}: {e}", exc_info=True)
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error during materialized view refresh: {e}", exc_info=True)
         raise

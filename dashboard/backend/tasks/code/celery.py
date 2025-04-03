@@ -22,10 +22,11 @@ REDIS_URL = f"{REDIS_BASE_URL}/{REDIS_QUEUE_DB}" # Redis URL for queues
 CELERY_QUEUES = (
     Queue('default', routing_key='default'),
     Queue('queue_aprs', routing_key='queue_aprs'),
-    Queue('queue_predictions', routing_key='queue_predictions'), # <--- Ensure defined
+    Queue('queue_predictions', routing_key='queue_predictions'),
     Queue('queue_iridium', routing_key='queue_iridium'),
     Queue('queue_lora', routing_key='queue_lora'),
-    Queue('queue_path_gen', routing_key='queue_path_gen'),       # <--- Ensure defined
+    Queue('queue_path_gen', routing_key='queue_path_gen'),
+    Queue('queue_broadcast', routing_key='queue_broadcast'),
 )
 
 # --- Celery App Initialization ---
@@ -39,7 +40,7 @@ app = Celery(
         'code.jobs.iridium',
         'code.jobs.lora',
         'code.jobs.path_generator',
-        # Include any module containing other scheduled tasks
+        'code.jobs.broadcast',
     ]
 )
 
@@ -80,10 +81,9 @@ app.conf.beat_schedule = {
     },
     # --- Path Generator Schedule ---
      'schedule-path-generator': {
-        'task': 'code.jobs.path_generator.run_scheduled_path_generation', # Task function for scheduled runs
-        'schedule': crontab(hour='3', minute='15'), # Example: Run daily at 03:15 UTC
-        'kwargs': {'param1': 'value1'}, # Optional: Keyword args for scheduled runs
-        'options': {'queue': 'queue_path_gen'} # Assign to its specific queue
+        'task': 'code.jobs.path_generator.run_scheduled_path_generation',
+        'schedule': crontab(minute='*/1'),
+        'options': {'queue': 'queue_path_gen'}
     },
     # --- Add other scheduled tasks as before ---
     # 'example-periodic-job': { ... },

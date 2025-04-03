@@ -12,9 +12,13 @@ ENV PYTHONUNBUFFERED 1
 # RUN apt-get update && apt-get install -y --no-install-recommends gcc libpq-dev && rm -rf /var/lib/apt/lists/*
 # Install curl for healthcheck
 # Combine update, install, and cleanup in one RUN layer
-RUN apt-get update && \
-    apt-get install -y curl --no-install-recommends && \
-    rm -rf /var/lib/apt/lists/*
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+    build-essential \
+    libpq-dev \
+    curl \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
 # ---- Builder Stage ----
 FROM base AS builder
@@ -48,4 +52,4 @@ EXPOSE 8000
 # USER appuser
 
 # Command to run the application using uvicorn
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*"]

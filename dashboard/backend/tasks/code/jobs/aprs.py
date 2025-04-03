@@ -9,6 +9,7 @@ from ..helpers import db
 from pydantic import ValidationError
 from ..models.raw_messages import RawMessage
 from ..models.packet import ParsedPacket, process_json_msg
+from ..jobs.broadcast import publish_telemetry
 
 import time
 import json
@@ -148,14 +149,23 @@ def process_aprs(self, raw_data_item):
     
     try:
         telemetry_id, was_inserted = db.upload_telemetry(telemetry=parsed_payload, payload_id=payload_id)
-        logger.info(f"Telemetry uploaded successfully with ID: {telemetry_id}")
+        logger.info(f"Telemetry {'inserted' if was_inserted else 'updated'} successfully with ID: {telemetry_id}")
     except Exception as e:
         logger.error(f"Error uploading telemetry: {e}")
         raise e
 
     if was_inserted:
-        # TODO: trigger a task to let the broadcasters know about the new telemetry
         logger.info(f"New telemetry inserted with ID: {telemetry_id}")
+        update_packet = {
+            'telemetry_id': str(telemetry_id),
+            'payload_id': str(payload_id),
+            'lon': parsed_payload.longitude,
+            'lat': parsed_payload.latitude,
+            'ts': parsed_payload.data_time.isoformat(),
+        }
+        publish_telemetry.delay(update_packet)
+    else:
+        logger.info(f"Telemetry already exists with ID: {telemetry_id}")
 
     try:
         # TODO: work out if relay should be path or which path or left as-is
