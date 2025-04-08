@@ -97,6 +97,173 @@ IGTXLIMIT 6 10
 ```
 
 ```bash
+sudo nano /lib/systemd/system/aprs.service
+
+ [Unit]
+ Description=APRS Gateway
+ After=multi-user.target
+
+ [Service]
+ Type=idle
+ WorkingDirectory=/home/gs
+ ExecStart=/bin/bash /home/gs/direwolf.sh
+ Restart=always
+
+ [Install]
+ WantedBy=multi-user.target
+
+ sudo systemctl daemon-reload
+ sudo systemctl enable aprs.service
+```
+
+```bash
+sudo apt update
+sudo apt install python3-pip -y
+
+pip3 install pyserial requests --break-system-packages
+
+sudo usermod -a -G dialout $USER
+# need to reboot here
+
+# move lora.py to /home/gs
+chmod +x /home/gs/lora.py
+
+sudo nano /etc/systemd/system/lora.service
+
+[Unit]
+Description=LoRa Serial
+After=network.target multi-user.target # Ensure network is up before starting
+# Optional: If the serial device takes time to appear, you might add:
+# Requires=dev-ttyACM0.device
+# After=dev-ttyACM0.device
+
+[Service]
+ExecStart=/usr/bin/python3 /home/gs/lora.py
+WorkingDirectory=/home/gs/
+StandardOutput=journal # Send stdout to systemd journal
+StandardError=journal  # Send stderr to systemd journal
+Restart=on-failure     # Restart the service if it exits with a non-zero code
+# Or use Restart=always to restart even on clean exit (less common)
+RestartSec=10          # Wait 10 seconds before restarting
+User=gs                # Run the script as the 'pi' user (or your user)
+Group=dialout          # Ensure the process has group permissions for serial port
+# Optional: If using a log file defined in the script, ensure the 'pi' user can write to it:
+# PermissionsStartOnly=true
+# ExecStartPre=/bin/touch /var/log/serial_to_api.log
+# ExecStartPre=/bin/chown pi:pi /var/log/serial_to_api.log
+
+
+[Install]
+WantedBy=multi-user.target # Start the service at multi-user boot level
+
+
+sudo systemctl daemon-reload
+sudo systemctl enable lora.service
+sudo systemctl start lora.service
+
+journalctl -u lora.service -f
+
+# move aprs.py to /home/gs
+chmod +x /home/gs/aprs.py
+
+sudo nano /etc/systemd/system/aprspy.service
+
+[Unit]
+Description=Direwolf APRS to API Forwarder
+# Make sure Direwolf is running first, and network is up
+Requires=aprs.service
+After=network.target aprs.service
+
+[Service]
+ExecStart=/usr/bin/python3 /home/gs/aprs.py
+WorkingDirectory=/home/gs/
+StandardOutput=journal
+StandardError=journal
+Restart=on-failure
+RestartSec=15          
+# Wait a bit longer before restarting
+User=gs                
+# Run as 'pi' user (or your user)
+# No specific group needed unless log file permissions require it
+
+# Optional: If using a log file defined in the script
+# PermissionsStartOnly=true
+# ExecStartPre=/bin/touch /var/log/direwolf_to_api.log
+# ExecStartPre=/bin/chown pi:pi /var/log/direwolf_to_api.log
+
+[Install]
+WantedBy=multi-user.target
+
+
+sudo systemctl daemon-reload
+sudo systemctl enable aprspy.service
+sudo systemctl start aprspy.service
+
+journalctl -u aprspy.service -f
+
+
+pip3 install fastapi uvicorn websockets "python-multipart" --break-system-packages
+
+sudo nano /etc/systemd/system/log-viewer.service
+
+[Unit]
+Description=Log Viewer Web Server (FastAPI/Uvicorn)
+After=network.target 
+# Needs network to run
+# Optional: Ensure other services are running, though journalctl handles missing units
+# Wants=direwolf.service serial-reader.service direwolf-listener.service
+
+[Service]
+User=gs              
+# CHANGE if you use a different user
+Group=gs             
+# CHANGE if you use a different group
+WorkingDirectory=/home/gs/  
+# CHANGE to your script directory
+Environment="PYTHONUNBUFFERED=1"      
+# Ensures python output isn't buffered
+
+# --- IMPORTANT: Choose the correct ExecStart line ---
+
+# Option 1: If uvicorn is installed globally or in system path
+ExecStart=/usr/bin/python3 -m uvicorn log_server:app --host 0.0.0.0 --port 8000 --workers 1
+
+# Option 2: If uvicorn is installed locally for the user (e.g., with pip3 install --user)
+# First find the path: run 'which uvicorn' or 'find /home/pi/.local -name uvicorn'
+# ExecStart=/home/gs/.local/bin/uvicorn log_server:app --host 0.0.0.0 --port 8000 --workers 1
+
+# --- End ExecStart options ---
+
+Restart=on-failure   
+# Restart if it crashes
+RestartSec=10        
+# Wait 10 seconds before restarting
+StandardOutput=journal 
+# Log this service's output to journald too
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+
+# Reload systemd to recognize the new service file
+sudo systemctl daemon-reload
+
+# Enable the service to start on boot
+sudo systemctl enable log-viewer.service
+
+# Start the service now
+sudo systemctl start log-viewer.service
+
+# Check its status (look for "active (running)")
+sudo systemctl status log-viewer.service
+
+# View logs specifically from the log viewer service itself
+journalctl -u log-viewer.service -f
+
+# open http://127.0.0.1:8000 in chrome
+```
+
+```bash
 # get the SD card device name
 # this will be something like /dev/sdb or /dev/mmcblk0
 sudo fdisk -l

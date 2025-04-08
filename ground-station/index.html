@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=2.0, user-scalable=no">
+    <title>Ground Station Log Viewer</title>
+    <style>
+        /* --- Base Styles (keep from previous version) --- */
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #2b2b2b;
+            color: #e0e0e0;
+            font-size: 14px;
+            line-height: 1.5;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        #header {
+            background-color: #3c3f41;
+            color: #d0d0d0;
+            padding: 8px 10px;
+            text-align: center;
+            flex-shrink: 0;
+            border-bottom: 1px solid #4f5254;
+        }
+
+        #header h1 {
+            margin: 0;
+            font-size: 1.1em;
+            font-weight: 500;
+        }
+
+        #logContainer {
+            flex-grow: 1;
+            overflow-y: scroll;
+            background-color: #2b2b2b;
+            padding: 5px;
+            font-family: 'SF Mono', Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+            font-size: 0.85em;
+            -webkit-overflow-scrolling: touch;
+        }
+
+        .log-line {
+            margin-bottom: 2px;
+            padding: 1px 3px;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            border-radius: 2px;
+        }
+
+        .log-line.hidden {
+            display: none;
+        }
+
+        /* <-- Class to hide filtered logs */
+
+        /* --- Log Line Styling (keep from previous version) --- */
+        .log-line.direwolf {
+            color: #87ceeb;
+        }
+
+        .log-line.serial-reader {
+            color: #90ee90;
+        }
+
+        .log-line.direwolf-listener {
+            color: #ffa07a;
+        }
+
+        .log-line.log-viewer {
+            color: #d3d3d3;
+        }
+
+        .log-line.unknown,
+        .log-line.json-error {
+            color: #f08080;
+        }
+
+        .log-line .timestamp {
+            color: #a9a9a9;
+            margin-right: 8px;
+        }
+
+        .log-line .hostname {
+            color: #bdb76b;
+            margin-right: 8px;
+        }
+
+        .log-line .unit {
+            font-weight: bold;
+            margin-right: 8px;
+        }
+
+        .log-line.level-error {
+            color: #ff6b6b;
+            font-weight: bold;
+        }
+
+        .log-line.level-warning {
+            color: #ffcc66;
+        }
+
+        #status {
+            padding: 5px 10px;
+            text-align: center;
+            font-style: italic;
+            color: #999;
+            flex-shrink: 0;
+            height: 1.5em;
+            line-height: 1.5em;
+        }
+
+        .status-error {
+            color: #ff6b6b !important;
+            font-weight: bold;
+        }
+
+        .status-ok {
+            color: #90ee90 !important;
+        }
+
+        body.scrolling * {
+            pointer-events: none;
+        }
+
+        /* --- NEW: Control Styles --- */
+        #controls {
+            padding: 6px 10px;
+            background-color: #313335;
+            flex-shrink: 0;
+            border-bottom: 1px solid #4f5254;
+        }
+
+        .control-group {
+            display: flex;
+            /* Use flexbox for alignment */
+            flex-wrap: wrap;
+            /* Allow wrapping on small screens */
+            align-items: center;
+            margin-bottom: 5px;
+            gap: 10px;
+            /* Spacing between items */
+        }
+
+        .control-group:last-child {
+            margin-bottom: 0;
+        }
+
+        .control-group label {
+            margin-right: 5px;
+            font-weight: 500;
+            color: #bbb;
+        }
+
+        .control-group select,
+        .control-group button {
+            padding: 4px 8px;
+            font-size: 0.9em;
+            background-color: #4f5254;
+            color: #e0e0e0;
+            border: 1px solid #6b6b6b;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        .control-group input[type="checkbox"] {
+            margin-right: 3px;
+            cursor: pointer;
+            vertical-align: middle;
+            /* Align checkbox with label text */
+        }
+
+        .control-group .checkbox-label {
+            /* Label next to checkbox */
+            margin-right: 10px;
+            /* Space between checkbox items */
+            cursor: pointer;
+            vertical-align: middle;
+        }
+
+        .control-group button:active {
+            background-color: #6b6b6b;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="header">
+        <h1>RPi Live Logs</h1>
+    </div>
+
+    <div id="controls">
+        <div class="control-group">
+            <label>Services:</label>
+            <span id="serviceFilters">
+            </span>
+        </div>
+        <div class="control-group">
+            <label for="levelFilter">Min Level:</label>
+            <select id="levelFilter">
+                <option value="7">Debug</option>
+                <option value="6" selected>Info</option>
+                <option value="5">Notice</option>
+                <option value="4">Warning</option>
+                <option value="3">Error</option>
+                <option value="0">Critical/Alert/Emergency</option>
+            </select>
+            <button id="pauseBtn">Pause</button>
+            <button id="clearBtn">Clear</button>
+            <button id="bottomBtn">Bottom</button>
+        </div>
+    </div>
+
+    <div id="logContainer">
+    </div>
+    <div id="status">Connecting...</div>
+
+    <script>
+        const logContainer = document.getElementById('logContainer');
+        const statusDiv = document.getElementById('status');
+        const pauseBtn = document.getElementById('pauseBtn');
+        const clearBtn = document.getElementById('clearBtn');
+        const bottomBtn = document.getElementById('bottomBtn');
+        const levelFilterSelect = document.getElementById('levelFilter');
+        const serviceFiltersContainer = document.getElementById('serviceFilters');
+
+        const maxLogLines = 300;
+        let ws;
+        let paused = false;
+        let autoScroll = true;
+        let scrollTimeout;
+
+        // --- Filter State ---
+        // Define the services you expect to see logs from
+        const knownServices = ['direwolf', 'lora', 'aprs', 'log-viewer']; // Add others if needed
+        let activeServices = new Set(knownServices); // Initially all are active
+        let minLogLevel = parseInt(levelFilterSelect.value); // Initial level from dropdown
+
+        // --- Populate Service Filters ---
+        function populateServiceFilters() {
+            serviceFiltersContainer.innerHTML = ''; // Clear existing
+            knownServices.forEach(serviceName => {
+                const label = document.createElement('label');
+                label.className = 'checkbox-label';
+
+                const checkbox = document.createElement('input');
+                checkbox.type = 'checkbox';
+                checkbox.name = 'service';
+                checkbox.value = serviceName;
+                checkbox.checked = activeServices.has(serviceName); // Set initial state
+                checkbox.onchange = handleFilterChange; // Add event listener
+
+                label.appendChild(checkbox);
+                label.appendChild(document.createTextNode(` ${serviceName.replace(/-/g, ' ')}`)); // Prettify name
+                serviceFiltersContainer.appendChild(label);
+            });
+        }
+
+        // --- WebSocket Connection (same as before) ---
+        function connectWebSocket() {
+            // ... (Keep the WebSocket connection logic exactly the same as the previous version) ...
+            const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${wsProtocol}//${window.location.host}/ws_logs`;
+            console.log(`Connecting to WebSocket: ${wsUrl}`);
+            statusDiv.textContent = 'Connecting...';
+            statusDiv.className = 'status'; // Reset class
+
+            ws = new WebSocket(wsUrl);
+
+            ws.onopen = () => {
+                console.log('WebSocket Connected');
+                statusDiv.textContent = 'Connected';
+                statusDiv.className = 'status status-ok';
+                setTimeout(() => { statusDiv.textContent = ''; }, 2000); // Hide status after 2s
+            };
+
+            ws.onmessage = (event) => {
+                // Don't process if paused
+                if (paused) return;
+
+                try {
+                    const logData = JSON.parse(event.data);
+                    // Check filters *before* appending
+                    if (shouldDisplayLog(logData)) {
+                        appendLogLine(logData);
+                    }
+                } catch (e) {
+                    console.error('Failed to parse log data:', event.data, e);
+                    const rawData = { MESSAGE: `RAW: ${event.data}`, _SYSTEMD_UNIT: 'json-error', PRIORITY: '3' }; // Treat parse errors as high priority
+                    if (shouldDisplayLog(rawData)) {
+                        appendLogLine(rawData);
+                    }
+                }
+            };
+
+            ws.onerror = (error) => {
+                console.error('WebSocket Error:', error);
+                statusDiv.textContent = 'WebSocket Error!';
+                statusDiv.className = 'status status-error';
+            };
+
+            ws.onclose = (event) => {
+                console.log('WebSocket Closed:', event.code, event.reason);
+                statusDiv.textContent = `Disconnected (Code: ${event.code}). Retrying...`;
+                statusDiv.className = 'status status-error';
+                setTimeout(connectWebSocket, 5000);
+            };
+        }
+
+        // --- Filtering Logic ---
+        function getLogMetadata(logData) {
+            let serviceName = 'unknown';
+            if (logData._SYSTEMD_UNIT) {
+                serviceName = logData._SYSTEMD_UNIT.replace(/\.service$/, '');
+            } else if (logData.source) { // Fallback
+                serviceName = logData.source;
+            }
+            // Journald PRIORITY: 0-2 (err/crit), 3 (err), 4 (warn), 5 (notice), 6 (info), 7 (debug)
+            const priority = parseInt(logData.PRIORITY || '6'); // Default to info if missing
+
+            // Add service to known list if it's new (optional, could repopulate checkboxes)
+            // if (!knownServices.includes(serviceName) && serviceName !== 'unknown' && serviceName !== 'json-error') {
+            //    knownServices.push(serviceName);
+            //    populateServiceFilters(); // Update UI
+            // }
+
+            return { serviceName, priority };
+        }
+
+        function shouldDisplayLog(logData) {
+            const { serviceName, priority } = getLogMetadata(logData);
+
+            // Check service filter
+            if (!activeServices.has(serviceName) && serviceName !== 'json-error' && serviceName !== 'unknown') {
+                // Always show unknown/error logs unless explicitly filtered out later? For now, filter them too.
+                // Could add separate checkboxes for 'unknown' or 'json-error' if desired.
+                if (!activeServices.has('unknown')) return false; // Allow filtering unknowns if needed
+            }
+
+            // Check level filter (lower priority number means higher severity)
+            if (priority > minLogLevel) {
+                return false;
+            }
+
+            return true; // Passes both filters
+        }
+
+        // --- Log Display ---
+        function appendLogLine(logData) {
+            const { serviceName, priority } = getLogMetadata(logData);
+
+            const lineElement = document.createElement('div');
+            lineElement.classList.add('log-line');
+            lineElement.classList.add(serviceName); // Add service name class for styling
+
+            // Store metadata on the element for potential re-filtering
+            lineElement.dataset.service = serviceName;
+            lineElement.dataset.level = priority;
+
+            // --- (Keep the rest of the DOM element creation logic from the previous version) ---
+            // Extract key info from journald JSON format
+            const timestampMs = parseInt(logData.__REALTIME_TIMESTAMP || logData._SOURCE_REALTIME_TIMESTAMP || '0') / 1000;
+            const timestampStr = timestampMs ? new Date(timestampMs).toLocaleTimeString() : '?:??:??';
+            const hostname = logData.HOSTNAME || logData._HOSTNAME || '';
+            const message = logData.MESSAGE || JSON.stringify(logData);
+
+            // Add level classes for highlighting
+            if (priority <= 3) lineElement.classList.add('level-error');
+            else if (priority === 4) lineElement.classList.add('level-warning');
+            // ... other levels if needed ...
+
+            // Construct the line content
+            const timeSpan = document.createElement('span');
+            timeSpan.className = 'timestamp'; timeSpan.textContent = `[${timestampStr}]`;
+            const hostSpan = document.createElement('span');
+            hostSpan.className = 'hostname'; hostSpan.textContent = hostname ? `[${hostname}]` : '';
+            const unitSpan = document.createElement('span');
+            unitSpan.className = 'unit'; unitSpan.textContent = `[${serviceName}]`;
+            const msgSpan = document.createElement('span');
+            msgSpan.className = 'message'; msgSpan.textContent = message;
+
+            lineElement.appendChild(timeSpan); lineElement.appendChild(hostSpan);
+            lineElement.appendChild(unitSpan); lineElement.appendChild(msgSpan);
+            // --- (End of kept DOM element creation logic) ---
+
+            logContainer.appendChild(lineElement);
+
+            // Prune old log lines (only prune visible ones? or all?)
+            // Pruning all is simpler, might prune hidden ones faster.
+            while (logContainer.children.length > maxLogLines) {
+                logContainer.removeChild(logContainer.firstChild);
+            }
+
+            // Scroll to bottom if autoScroll is enabled
+            if (autoScroll) {
+                scrollToBottom();
+            }
+        }
+
+        function scrollToBottom() {
+            logContainer.scrollTop = logContainer.scrollHeight;
+        }
+
+        // --- Filter Handling ---
+        function handleFilterChange() {
+            // Update active service list
+            activeServices.clear();
+            const checkedBoxes = serviceFiltersContainer.querySelectorAll('input[name="service"]:checked');
+            checkedBoxes.forEach(box => activeServices.add(box.value));
+
+            // Update min log level
+            minLogLevel = parseInt(levelFilterSelect.value);
+
+            console.log("Filters updated:", { services: Array.from(activeServices), level: minLogLevel });
+            applyFiltersToExisting();
+        }
+
+        function applyFiltersToExisting() {
+            const allLines = logContainer.querySelectorAll('.log-line');
+            console.log(`Applying filters to ${allLines.length} existing lines...`);
+            let visibleCount = 0;
+            allLines.forEach(line => {
+                const service = line.dataset.service || 'unknown';
+                const level = parseInt(line.dataset.level || '6');
+
+                // Check service filter
+                const serviceMatch = activeServices.has(service) || service === 'json-error' || service === 'unknown'; // Maybe always show errors?
+                // Check level filter
+                const levelMatch = level <= minLogLevel;
+
+                if (serviceMatch && levelMatch) {
+                    line.classList.remove('hidden');
+                    visibleCount++;
+                } else {
+                    line.classList.add('hidden');
+                }
+            });
+            console.log(`${visibleCount} lines visible after filtering.`);
+            // Optionally scroll to bottom after filtering if auto-scroll was on
+            if (autoScroll) scrollToBottom();
+        }
+
+
+        // --- Controls (Event Listeners) ---
+        pauseBtn.onclick = () => {
+            paused = !paused;
+            pauseBtn.textContent = paused ? 'Resume' : 'Pause';
+            statusDiv.textContent = paused ? 'Paused' : '';
+            statusDiv.className = 'status';
+        };
+
+        clearBtn.onclick = () => {
+            logContainer.innerHTML = ''; // Clear display
+        };
+
+        bottomBtn.onclick = () => {
+            autoScroll = true;
+            scrollToBottom();
+            bottomBtn.style.backgroundColor = '';
+            console.log("Auto-scroll force enabled");
+        };
+
+        // Add listener for log level dropdown
+        levelFilterSelect.onchange = handleFilterChange;
+
+        // Detect scroll to manage auto-scroll (same as before)
+        logContainer.onscroll = () => {
+            // ... (Keep the onscroll logic exactly the same as the previous version) ...
+            const isAtBottom = logContainer.scrollHeight - logContainer.scrollTop - logContainer.clientHeight < 5;
+            if (!isAtBottom && autoScroll) {
+                autoScroll = false;
+                bottomBtn.style.backgroundColor = '#ffcc66'; // Indicate auto-scroll off
+                console.log("Auto-scroll disabled");
+            } else if (isAtBottom && !autoScroll) {
+                autoScroll = true;
+                bottomBtn.style.backgroundColor = ''; // Reset style
+                console.log("Auto-scroll enabled");
+            }
+
+            document.body.classList.add('scrolling');
+            clearTimeout(scrollTimeout);
+            scrollTimeout = setTimeout(() => {
+                document.body.classList.remove('scrolling');
+            }, 150);
+        };
+
+        // --- Initialisation ---
+        populateServiceFilters(); // Create checkboxes on load
+        connectWebSocket(); // Start connection
+
+    </script>
+</body>
+
+</html>
