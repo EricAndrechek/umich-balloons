@@ -90,7 +90,9 @@ def process_iridium(self, raw_data_item):
     # now we try to parse the payload as JSON
     parsed_payload = None
     try:
-        parsed_payload = process_json_msg(parsed_data)
+        # TODO: what happens if lat/lon are not present?
+        # in this case, we should send the iridium lat/lon and cep
+        parsed_payload = process_json_msg(parsed_data, "Iridium", iridium_latitude=iridium_message.iridium_latitude, iridium_longitude=iridium_message.iridium_longitude, iridium_cep=iridium_message.iridium_cep)
         logger.debug(f"Parsed payload: {parsed_payload}")
     except json.JSONDecodeError as e:
         logger.error(f"Failed to decode JSON payload: {e}")

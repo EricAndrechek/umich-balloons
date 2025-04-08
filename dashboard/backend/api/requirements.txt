@@ -7,5 +7,5 @@ python-dotenv
 
 python-jose
 cryptography
-aprspy
-h3
+python-dateutil
+aprslib

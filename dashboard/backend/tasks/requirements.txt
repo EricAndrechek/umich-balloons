@@ -6,5 +6,5 @@ pydantic>=2.0.0     # Data validation
 sqlalchemy>=1.4     # SQL toolkit
 psycopg2-binary     # PostgreSQL database adapter
 # Add any libraries needed by your *task* code (e.g., requests, numpy, etc.)
-aprspy              # APRS message parser
-h3                  # H3 geospatial indexing
+aprslib             # APRS message parser
+pygeohash

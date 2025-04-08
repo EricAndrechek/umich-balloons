@@ -139,15 +139,11 @@ class LoRaMessage(BaseModel):
     )
 
 
-class Bbox(BaseModel):
-    minLat: float
-    minLon: float
-    maxLat: float
-    maxLon: float
-
-
 class InitialDataRequest(BaseModel):
-    bbox: Bbox
+    geohashes: Set[str] = Field(
+        ...,
+        description="Set of geohashes the user wants to receive updates for.",
+    )
     history_seconds: int = Field(
         default=10800,  # Default to 3 hours (3 * 60 * 60)
         gt=0,  # Ensure positive value
@@ -155,10 +151,11 @@ class InitialDataRequest(BaseModel):
         description="How far back to fetch historical data, in seconds.",
     )
 
-
 class UpdateViewportRequest(BaseModel):
-    bbox: Bbox
-
+    geohashes: List[str] = Field(
+        ...,
+        description="Set of geohashes the user wants to receive updates for.",
+    )
 
 class PointData(BaseModel):
     """Represents a single point in a payload's path."""
@@ -188,18 +185,6 @@ class PositionUpdateData(BaseModel):
     # altitude: Optional[float] = None
     # speed: Optional[float] = None
     # course: Optional[float] = None
-
-
-class TelemetryRequest(BaseModel):
-    """Request structure for fetching detailed telemetry."""
-
-    payloadId: int = Field(..., description="Corresponds to payloads.id")
-    timestamp: str = Field(
-        ...,
-        description="ISO 8601 timestamp (UTC) of the specific data point (data_time)",
-    )
-
-
 class TelemetryData(BaseModel):
     """Detailed telemetry data for a specific point in time. Matches 'telemetry' table columns."""
 

@@ -28,11 +28,9 @@ def run_scheduled_path_generation(self, *args, **kwargs):
     logger.info(f"Running SCHEDULED path generation. Task ID: {self.request.id}")
     logger.debug(f"Scheduled run args: {args}, kwargs: {kwargs}")
     try:
-        # connect to db and run
-        # REFRESH MATERIALIZED VIEW CONCURRENTLY public.mv_payload_path_segments;
-
-        db.refresh_materialized_view('mv_payload_path_segments')
-        result = "Materialized view refreshed successfully."
+        # connect to db and run update payload paths binned function
+        rows_affected = db.refresh_bins()
+        result = f"Scheduled path generation completed. Rows affected: {rows_affected}"
         logger.info(result)
         
         return result

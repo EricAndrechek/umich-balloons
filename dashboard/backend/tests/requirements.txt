@@ -1,0 +1,8 @@
+aprspy
+paho-mqtt
+python-dotenv
+requests
+h3
+colorlog
+sqlalchemy
+psycopg2-binary

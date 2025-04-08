@@ -1,6 +1,7 @@
 # app/routers/ingress.py
 import json
 import logging
+from webbrowser import get
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Header
 import redis.asyncio as redis
 from datetime import datetime, timezone
@@ -8,7 +9,7 @@ from typing import Dict, Any
 
 # --- Utility and Core Imports ---
 from ..utils import network
-from ..core.redis_client import get_redis
+from ..core.redis_client import get_redis_pubsub_client
 from ..utils.security import verify_groundcontrol_jwt
 from ..models.models import (
     APRSMessage,
@@ -16,8 +17,7 @@ from ..models.models import (
     IridiumMessage,
     QueueStatusResponse,
 )
-
-from aprspy import APRS
+import aprslib
 
 # --- Router Setup ---
 router = APIRouter(
@@ -52,7 +52,9 @@ async def _push_to_redis_queue(
         ) from e
 
     try:
-        queue_length = await redis_client.rpush(queue_name, redis_message_json)
+        queue_length = await redis_client.rpush(
+            queue_name, redis_message_json
+        )
         log.info(
             f"Message pushed to '{queue_name}' Redis list. New length: {queue_length}"
         )
@@ -93,7 +95,7 @@ async def queue_aprs_message(
     message: APRSMessage,
     request: Request,
     x_forwarded_for: str | None = Header(default=None),
-    message_queue: redis.Redis = Depends(get_redis),
+    message_queue: redis.Redis = Depends(get_redis_pubsub_client),
 ):
     """
     Receives an APRS message via POST, extracts info,
@@ -107,9 +109,9 @@ async def queue_aprs_message(
     # 1. Decode the APRS message (if string and not JSON/object)
     if isinstance(message.raw_data, str):
         try:
-            decoded_data = APRS.parse(message.raw_data)
-            destination = decoded_data.destination
-            source = decoded_data.source
+            decoded_data = aprslib.parse(message.raw_data)
+            destination = decoded_data['to']
+            source = decoded_data['from']
             log.info(f"Successfully decoded APRS data from {source} to {destination}.")
         except Exception as decode_error:
             decoded_data = False
@@ -165,7 +167,7 @@ async def queue_lora_message(
     message: LoRaMessage,
     request: Request,
     x_forwarded_for: str | None = Header(default=None),
-    message_queue: redis.Redis = Depends(get_redis),
+    message_queue: redis.Redis = Depends(get_redis_pubsub_client),
 ):
     """
     Receives a LoRa message via POST, extracts info,
@@ -212,7 +214,7 @@ async def queue_iridium_message(
     message: IridiumMessage,
     request: Request,
     x_forwarded_for: str | None = Header(default=None),
-    message_queue: redis.Redis = Depends(get_redis),
+    message_queue: redis.Redis = Depends(get_redis_pubsub_client),
 ):
     """
     Receives an Iridium message via POST, validates JWT, extracts info,

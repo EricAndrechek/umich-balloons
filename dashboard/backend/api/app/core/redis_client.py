@@ -6,47 +6,88 @@ from fastapi import WebSocket
 from .config import settings
 from ..services.connection_manager import manager  # Import connection manager
 
-redis_client: redis.Redis | None = None
+redis_pubsub_client: redis.Redis | None = None
+redis_cache_client: redis.Redis | None = None
+
 pubsub_listener_task: asyncio.Task | None = None
 
 import logging
 
 log = logging.getLogger(__name__)
 
+async def create_redis_clients():
+    """Creates Redis clients for Pub/Sub and Caching."""
+    global redis_pubsub_client, redis_cache_client
 
-async def connect_redis():
-    """Connects to Redis."""
-    global redis_client
     try:
-        redis_client = redis.from_url(settings.REDIS_URL, db=settings.REDIS_QUEUE_DB, decode_responses=True)
-        await redis_client.ping()
-        log.debug("Connected to Redis successfully.")
+        redis_pubsub_client = redis.from_url(
+            settings.REDIS_URL,
+            db=settings.REDIS_QUEUE_DB,
+            decode_responses=True,
+            health_check_interval=30,
+        )
+        redis_cache_client = redis.from_url(
+            settings.REDIS_URL,
+            db=settings.REDIS_CACHE_DB,
+            decode_responses=True,
+            health_check_interval=30,
+        )
+
+        # Perform checks
+        await redis_pubsub_client.ping()
+        log.info("Redis Pub/Sub connection successful.")
+        await redis_cache_client.ping()
+        log.info("Redis Cache connection successful.")
+
     except Exception as e:
-        log.error(f"Error connecting to Redis: {e}")
-        raise
+        log.error(
+            f"Failed to connect to one or more Redis instances: {e}", exc_info=True
+        )
+        # Clean up partially connected clients if necessary
+        if redis_pubsub_client:
+            await redis_pubsub_client.close()
+        if redis_cache_client:
+            await redis_cache_client.close()
+        redis_pubsub_client = None
+        redis_cache_client = None
+        raise  # Re-raise to signal connection failure
 
 
-async def close_redis():
-    """Closes the Redis connection."""
-    global redis_client
-    if redis_client:
-        await redis_client.close()
-        log.debug("Redis connection closed.")
+async def close_redis_clients():
+    """Closes Redis connections."""
+    global redis_pubsub_client, redis_cache_client
+    tasks = []
+    if redis_pubsub_client:
+        log.info("Closing Redis Pub/Sub connection...")
+        tasks.append(redis_pubsub_client.close())
+        redis_pubsub_client = None
+    if redis_cache_client:
+        log.info("Closing Redis Cache connection...")
+        tasks.append(redis_cache_client.close())
+        redis_cache_client = None
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)  # Close concurrently
+    log.info("Redis connections closed.")
 
 
-async def get_redis():
-    """Dependency to get the Redis client."""
-    if not redis_client:
-        raise Exception("Redis client not initialized.")
-    return redis_client
+def get_redis_pubsub_client():
+    if not redis_pubsub_client:
+        raise Exception("Redis Pub/Sub client not initialized.")
+    return redis_pubsub_client
+
+
+def get_redis_cache_client():
+    if not redis_cache_client:
+        raise Exception("Redis Cache client not initialized.")
+    return redis_cache_client
 
 
 async def pubsub_listener():
     """Listens to Redis Pub/Sub for real-time updates and broadcasts."""
-    if not redis_client:
+    if not redis_pubsub_client:
         return  # Should not happen if called after connect_redis
 
-    pubsub = redis_client.pubsub()
+    pubsub = redis_pubsub_client.pubsub()
     await pubsub.subscribe(settings.REDIS_UPDATES_CHANNEL)
     log.info(f"Subscribed to Redis channel: {settings.REDIS_UPDATES_CHANNEL}")
 
@@ -59,8 +100,8 @@ async def pubsub_listener():
                 log.info(f"Received message from Redis: {message['data']}")  # Debug
                 try:
                     data = json.loads(message["data"])
-                    grid_cell_id = data.get("grid_cell_id")
-                    if grid_cell_id:
+                    geohash_str = data.get("geohash_str")
+                    if geohash_str:
                         # Prepare payload for clients
                         payload = {
                             "type": "newPosition",  # Define event types clearly
@@ -72,12 +113,13 @@ async def pubsub_listener():
                                 "ts": data.get("ts"),
                             },
                         }
+                        log.info(f"Broadcasting to room {geohash_str}: {payload}")
                         # Broadcast using the connection manager
                         await manager.broadcast_to_room(
-                            grid_cell_id, json.dumps(payload)
+                            geohash_str, json.dumps(payload)
                         )
                     else:
-                        log.warning("Warning: Redis message missing grid_cell_id")
+                        log.warning("Warning: Redis message missing geohash_str")
                 except json.JSONDecodeError:
                     log.error(f"Error decoding JSON from Redis message: {message['data']}")
                 except Exception as e:

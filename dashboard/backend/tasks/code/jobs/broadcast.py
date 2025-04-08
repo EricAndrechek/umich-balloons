@@ -17,14 +17,12 @@ from datetime import datetime, timezone
 from typing import Optional, Union
 import uuid
 import redis
-import h3
+import pygeohash as pgh
 
 # --- Configuration ---
 REDIS_QUEUE_DB = os.environ.get('REDIS_QUEUE_DB', '0') # Default Redis DB for queues
 REDIS_CACHE_DB = os.environ.get('REDIS_CACHE_DB', '1') # Default Redis DB for cache
 REDIS_URL = os.environ.get('REDIS_URL', 'redis://redis:6379/')
-
-H3_RESOLUTION = int(os.environ.get('H3_RESOLUTION', '7'))
 
 
 @app.task(bind=True, name='tasks.publish_telemetry')
@@ -45,10 +43,10 @@ def publish_telemetry(self, result_data):
         redis_client = redis.StrictRedis.from_url(REDIS_URL, db=REDIS_QUEUE_DB)
         redis_client.ping()
         
-        # get grid_cell_id from lat/lon
-        grid_cell_id = h3.latlng_to_cell(result_data['lat'], result_data['lon'], H3_RESOLUTION)
-        # Add grid_cell_id to the result_data
-        result_data['grid_cell_id'] = grid_cell_id
+        # get geohash from lat/lon
+        geohash_str = pgh.encode(latitude=result_data['lat'], longitude=result_data['lon'], precision=8)
+        # Add geohash_str to the result_data
+        result_data['geohash_str'] = geohash_str
 
         channel_name = "realtime-updates"
         json_output = json.dumps(result_data)

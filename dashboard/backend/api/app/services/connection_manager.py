@@ -7,7 +7,7 @@ log = logging.getLogger(__name__)
 
 class ConnectionManager:
     def __init__(self):
-        # Map grid_cell_id to a set of active WebSockets in that cell
+        # Map grid_gh_str to a set of active WebSockets in that cell
         self.room_connections: Dict[str, Set[WebSocket]] = {}
         # Map WebSocket connection to the set of cells it's currently subscribed to
         self.socket_subscriptions: Dict[WebSocket, Set[str]] = {}
@@ -30,50 +30,55 @@ class ConnectionManager:
         self.active_connections.remove(websocket)
         # Remove socket from all rooms it was in
         current_cells = self.socket_subscriptions.get(websocket, set())
-        for cell_id in current_cells:
-            if cell_id in self.room_connections:
-                self.room_connections[cell_id].discard(websocket)
+        for gh_str in current_cells:
+            if gh_str in self.room_connections:
+                self.room_connections[gh_str].discard(websocket)
                 # Optional: Clean up empty rooms
-                if not self.room_connections[cell_id]:
-                    del self.room_connections[cell_id]
+                if not self.room_connections[gh_str]:
+                    del self.room_connections[gh_str]
         # Remove socket from subscriptions mapping
         if websocket in self.socket_subscriptions:
             del self.socket_subscriptions[websocket]
 
-    async def send_personal_message(self, message: str, websocket: WebSocket):
-        await websocket.send_text(message)
-
-    async def add_to_room(self, websocket: WebSocket, cell_id: str):
-        if cell_id not in self.room_connections:
-            self.room_connections[cell_id] = set()
-        self.room_connections[cell_id].add(websocket)
+    async def add_to_room(self, websocket: WebSocket, gh_str: str):
+        if gh_str not in self.room_connections:
+            self.room_connections[gh_str] = set()
+        self.room_connections[gh_str].add(websocket)
         if websocket in self.socket_subscriptions:
-            self.socket_subscriptions[websocket].add(cell_id)
-        # log.debug(f"WebSocket {websocket.client.host} added to room {cell_id}")
+            self.socket_subscriptions[websocket].add(gh_str)
+        # log.debug(f"WebSocket {websocket.client.host} added to room {gh_str}")
 
-    async def remove_from_room(self, websocket: WebSocket, cell_id: str):
-        if cell_id in self.room_connections:
-            self.room_connections[cell_id].discard(websocket)
-            if not self.room_connections[cell_id]:  # Clean up empty room
-                del self.room_connections[cell_id]
+    async def remove_from_room(self, websocket: WebSocket, gh_str: str):
+        if gh_str in self.room_connections:
+            self.room_connections[gh_str].discard(websocket)
+            if not self.room_connections[gh_str]:  # Clean up empty room
+                del self.room_connections[gh_str]
         if websocket in self.socket_subscriptions:
-            self.socket_subscriptions[websocket].discard(cell_id)
-        # log.debug(f"WebSocket {websocket.client.host} removed from room {cell_id}")
+            self.socket_subscriptions[websocket].discard(gh_str)
+        # log.debug(f"WebSocket {websocket.client.host} removed from room {gh_str}")
 
-    async def update_subscriptions(self, websocket: WebSocket, new_cells: Set[str]):
+    async def update_subscriptions(self, websocket: WebSocket, geohashes: List[str]):
         """Updates a websocket's room subscriptions based on the new set."""
-        current_cells = self.socket_subscriptions.get(websocket, set())
-        cells_to_leave = current_cells - new_cells
-        cells_to_join = new_cells - current_cells
+        # convert to set
+        new_geohashes = set(geohashes)
+        current_geohashes = self.socket_subscriptions.get(websocket, set())
 
-        for cell_id in cells_to_leave:
-            await self.remove_from_room(websocket, cell_id)
-        for cell_id in cells_to_join:
-            await self.add_to_room(websocket, cell_id)
+        geohashes_to_leave = current_geohashes - new_geohashes
+        geohashes_to_join = new_geohashes - current_geohashes
+
+        if geohashes_to_leave:
+            for geohash in geohashes_to_leave:
+                await self.remove_from_room(websocket, geohash)
+        if geohashes_to_join:
+            for geohash in geohashes_to_join:
+                await self.add_to_room(websocket, geohash)
 
         # Update the primary mapping
-        self.socket_subscriptions[websocket] = new_cells
-        return cells_to_join, cells_to_leave  # Return joined/left for potential actions
+        self.socket_subscriptions[websocket] = new_geohashes
+        return (
+            geohashes_to_join,
+            geohashes_to_leave,
+        )  # Return joined/left for potential actions
 
     async def send_personal_message(self, message: str, websocket: WebSocket):
         """Sends a message directly to a single websocket."""
@@ -84,15 +89,16 @@ class ConnectionManager:
             # If sending fails, likely disconnected, clean up
             self.disconnect(websocket)
 
-    async def broadcast_to_room(self, cell_id: str, message: str):
-        """Broadcasts a message to all websockets in a specific room."""
-        if cell_id in self.room_connections:
+    async def _broadcast_to_room(self, room: str, message: str):
+        """Broadcasts a message to all websockets in a room."""
+        if room in self.room_connections:
+            log.info(
+                f"Broadcasting to room {room} ({len(self.room_connections[room])} sockets): {message[:100]}..."
+            )
+
             disconnected_sockets = set()
             # Create a copy of the set to iterate over, as disconnect can modify it
-            sockets_in_room = list(self.room_connections[cell_id])
-            log.debug(
-                f"Broadcasting to room {cell_id} ({len(sockets_in_room)} sockets): {message[:100]}..."
-            )  # Log snippet
+            sockets_in_room = list(self.room_connections[room])
             for websocket in sockets_in_room:
                 try:
                     await websocket.send_text(message)
@@ -107,7 +113,15 @@ class ConnectionManager:
             for websocket in disconnected_sockets:
                 self.disconnect(websocket)
         else:
-            log.warning(f"Attempted to broadcast to non-existent room {cell_id}")
+            log.warning(f"Attempted to broadcast to non-existent room {room}")
+
+    async def broadcast_to_room(self, gh_str: str, message: str):
+        """Broadcasts a message to all websockets in tiered hieracrchy of geohash string"""
+        for i in range(len(gh_str), 0, -1):
+            # Check if the room exists at the current level
+            room = gh_str[:i]
+            if room in self.room_connections:
+                await self._broadcast_to_room(room, message)
 
     async def broadcast(self, message: str):
         for connection in self.active_connections:

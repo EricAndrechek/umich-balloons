@@ -48,7 +48,7 @@ services:
   
   # PostgreSQL Database
   postgres:
-    image: postgis/postgis
+    build: ./sql
     container_name: postgres
     restart: unless-stopped
     environment:
@@ -87,57 +87,67 @@ services:
       timeout: 5s
       retries: 5
   
-  # aprs:
-  #   build: ./aprs
-  #   container_name: aprs
-  #   depends_on:
-  #     redis:
-  #       condition: service_started
-  #   environment:
-  #     - REDIS_URL=${REDIS_URL}
-  #   restart: unless-stopped
-  #   networks:
-  #     - balloon_net
-  
-  mosquitto:
-    image: iegomez/mosquitto-go-auth:latest
-    container_name: mosquitto
-    ports:
-      - "1883:1883"
-    volumes:
-      - ./mosquitto/config:/mosquitto/config
-      - ./mosquitto/data:/mosquitto/data
-      - ./mosquitto/log:/mosquitto/log
-      # entrypoint for setting username and password
-      - ./mosquitto/entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
-    environment:
-      # Pass credentials from .env file for the entrypoint script to use
-      - MQTT_BRIDGE_USERNAME=${MQTT_BRIDGE_USERNAME}
-      - MQTT_BRIDGE_PASSWORD=${MQTT_BRIDGE_PASSWORD}
-    # Override the default entrypoint/command to run your script
-    entrypoint: /usr/local/bin/entrypoint.sh
-    networks: 
-      - balloon_net
-    restart: unless-stopped
-  
-  mqtt-bridge:
-    build: ./mqtt-bridge
-    container_name: mqtt-bridge
+  aprs:
+    build: ./aprs
+    container_name: aprs
     depends_on:
-      - mosquitto
-      - redis
+      redis:
+        condition: service_started
     environment:
+      - LOG_LEVEL=INFO
       - REDIS_URL=${REDIS_URL}
       - REDIS_QUEUE_DB=${REDIS_QUEUE_DB}
       - REDIS_CACHE_DB=${REDIS_CACHE_DB}
-
-      - MQTT_BROKER_HOST=mosquitto # Service name
-      - MQTT_BROKER_PORT=1883
-      - MQTT_BRIDGE_USERNAME=${MQTT_BRIDGE_USERNAME} # Load from .env
-      - MQTT_BRIDGE_PASSWORD=${MQTT_BRIDGE_PASSWORD} # Load from .env
+      - APRS_IS_CALLSIGN=${APRS_IS_CALLSIGN}
+      - APRS_IS_PASSWORD=${APRS_IS_PASSWORD}
+      - APRS_IS_HOST=${APRS_IS_HOST}
+      - APRS_IS_PORT=${APRS_IS_PORT}
+      - APRS_FILTER=${APRS_FILTER}
+    restart: unless-stopped
     networks:
       - balloon_net
-    restart: unless-stopped
+  
+  # See the /mosquitto or /mqtt-bridge directories for more info,
+  # but we are not using MQTT since we cannot tunnel them out.
+  # mosquitto:
+  #   image: iegomez/mosquitto-go-auth:latest
+  #   container_name: mosquitto
+  #   ports:
+  #     - "1883:1883"
+  #   volumes:
+  #     - ./mosquitto/config:/mosquitto/config
+  #     - ./mosquitto/data:/mosquitto/data
+  #     - ./mosquitto/log:/mosquitto/log
+  #     # entrypoint for setting username and password
+  #     - ./mosquitto/entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
+  #   environment:
+  #     # Pass credentials from .env file for the entrypoint script to use
+  #     - MQTT_BRIDGE_USERNAME=${MQTT_BRIDGE_USERNAME}
+  #     - MQTT_BRIDGE_PASSWORD=${MQTT_BRIDGE_PASSWORD}
+  #   # Override the default entrypoint/command to run your script
+  #   entrypoint: /usr/local/bin/entrypoint.sh
+  #   networks: 
+  #     - balloon_net
+  #   restart: unless-stopped
+  
+  # mqtt-bridge:
+  #   build: ./mqtt-bridge
+  #   container_name: mqtt-bridge
+  #   depends_on:
+  #     - mosquitto
+  #     - redis
+  #   environment:
+  #     - REDIS_URL=${REDIS_URL}
+  #     - REDIS_QUEUE_DB=${REDIS_QUEUE_DB}
+  #     - REDIS_CACHE_DB=${REDIS_CACHE_DB}
+
+  #     - MQTT_BROKER_HOST=mosquitto # Service name
+  #     - MQTT_BROKER_PORT=1883
+  #     - MQTT_BRIDGE_USERNAME=${MQTT_BRIDGE_USERNAME} # Load from .env
+  #     - MQTT_BRIDGE_PASSWORD=${MQTT_BRIDGE_PASSWORD} # Load from .env
+  #   networks:
+  #     - balloon_net
+  #   restart: unless-stopped
   
   tasks:
     build: ./tasks

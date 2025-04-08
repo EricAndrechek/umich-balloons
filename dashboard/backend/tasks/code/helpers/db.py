@@ -1,16 +1,17 @@
 # code/helpers/db.py
 import os
 import logging
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, text, select, func
 from sqlalchemy.exc import SQLAlchemyError, IntegrityError
 from sqlalchemy.pool import QueuePool # A standard pool implementation
 import psycopg2.errors
 
+import hashlib
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone, time as dt_time
 import json
 
-from typing import Optional, Union
+from typing import Optional, Union, Any, List, Dict
 
 from ..models.callsign import Callsign
 from ..models.packet import ParsedPacket
@@ -94,7 +95,7 @@ def execute_query(sql_query: str, params: dict = None):
         logger.error(f"Unexpected error during query execution: {e}", exc_info=True)
         raise
 
-def execute_update(sql_query: str, params: dict = None, return_full_row: bool = False) -> Union[int, uuid.UUID, None]:
+def execute_update(sql_query: str, params: dict = None, return_full_row: bool = False):
     """
     Helper to execute INSERT/UPDATE/DELETE queries.
     Uses a transaction.
@@ -122,6 +123,7 @@ def execute_update(sql_query: str, params: dict = None, return_full_row: bool = 
                     else:
                         # Fetch and return only the first scalar value (or None) - OLD BEHAVIOR
                         returned_value = result.scalar()
+                        # returned_value = result.scalar_one_or_none()
                         logger.debug(f"Update returned scalar value: {returned_value}")
                 else:
                     # Fallback or logging if no RETURNING clause was detected/used
@@ -147,7 +149,7 @@ def execute_update(sql_query: str, params: dict = None, return_full_row: bool = 
 # --- Payload Table Functions ---
 # -------------------------------
 
-def get_payload_id(callsign: Callsign) -> int:
+def get_payload_id(callsign: Callsign) -> uuid.UUID:
     """
     Given a callsign, find if a payload mapped to one of them exists in the database.
     If a payload is not found, create a new one.
@@ -170,13 +172,18 @@ def get_payload_id(callsign: Callsign) -> int:
 
     # Payload not found, create a new one
     sql_insert = """
-    INSERT INTO payloads (callsign) VALUES (:callsign) RETURNING id
+    INSERT INTO payloads (callsign)
+    VALUES (:callsign)
+    ON CONFLICT (callsign)
+    DO UPDATE SET
+        callsign = EXCLUDED.callsign
+    RETURNING id;
     """
     params = {'callsign': callsign}
     result = execute_update(sql_insert, params)
     
-    if isinstance(result, int):
-        # If the result is an integer, it means the insert was successful
+    if isinstance(result, uuid.UUID):
+        # If the result is a uuid, it means the insert was successful
         logger.info(f"Created new payload with ID: {result} for callsign: {callsign}")
         return result
     else:
@@ -204,11 +211,11 @@ def upload_raw_message(raw_message: RawMessage, transmit_method: str, ingest_met
     # Make raw_message.payload into a JSON string
     if isinstance(raw_message.payload, (dict, list)):
         payload_str = json.dumps(raw_message.payload)
-    elif not isinstance(raw_message.payload, str):
+    elif not isinstance(raw_message.payload, (str, bytes)):
         logger.error(f"Invalid payload type: {type(raw_message.payload)}")
-        raise ValueError("Payload must be a string, dict, or list.")
+        raise ValueError("Payload must be a string, bytes, dict, or list.")
     else:
-        payload_str = raw_message.payload
+        payload_str = raw_message.payload if isinstance(raw_message.payload, str) else raw_message.payload.decode('utf-8', errors='backslashreplace')
     
     # Prepare the SQL query
     sql_insert = """
@@ -245,7 +252,7 @@ def upload_raw_message(raw_message: RawMessage, transmit_method: str, ingest_met
 # --- Telemetry Table Functions ---
 # ---------------------------------
 
-def upload_telemetry(telemetry: ParsedPacket, payload_id: int) -> tuple[uuid.UUID, bool]:
+def upload_telemetry(telemetry: ParsedPacket, payload_id: uuid.UUID) -> tuple[uuid.UUID, bool]:
     """
     Upload telemetry data to the database.
     Args:
@@ -257,7 +264,7 @@ def upload_telemetry(telemetry: ParsedPacket, payload_id: int) -> tuple[uuid.UUI
             course: telemetry.course
             battery: telemetry.battery
             extra: telemetry.extra
-        payload_id (int): The ID of the payload in the database: payload_id
+        payload_id (uuid): The ID of the payload in the database: payload_id
     Returns:
         telemetry_id (uuid): The ID of the uploaded telemetry in the database.
         If this is a duplicate (based on constraint (payload_id, data_time)), returns the ID of the existing telemetry.
@@ -272,67 +279,57 @@ def upload_telemetry(telemetry: ParsedPacket, payload_id: int) -> tuple[uuid.UUI
     if payload_id is None:
         raise ValueError("payload_id cannot be None.")
 
-    params = {
-        'payload_id': payload_id,
-        'data_time': telemetry.data_time.isoformat() if telemetry.data_time else None,
+    # check if symbol in telemetry
+    if hasattr(telemetry, 'symbol') and telemetry.symbol is not None and telemetry.symbol != '' and isinstance(telemetry.symbol, str):
+        # quick check to see if payload_id has a symbol in db yet
+        symbol_check_query = """
+        SELECT symbol FROM payloads WHERE id = :p_payload_id;
+        """
+        symbol_result = execute_query(symbol_check_query, {'p_payload_id': payload_id})
+        if symbol_result:
+            symbol = symbol_result[0][0]
+            if symbol is None or symbol == '':
+                # update the symbol if it was None or empty
+                symbol_update_query = """
+                UPDATE payloads SET symbol = :p_symbol WHERE id = :p_payload_id;
+                """
+                execute_update(symbol_update_query, {'p_symbol': telemetry.symbol, 'p_payload_id': payload_id})
+                logger.info(f"Updated symbol for payload {payload_id} to {telemetry.symbol}.")
+        else:
+            # if no result, we have a problem
+            logger.error(f"Failed to retrieve symbol for payload {payload_id}.")
+            raise ValueError("Failed to retrieve symbol for payload.")
 
-        'latitude': telemetry.latitude,
-        'longitude': telemetry.longitude,
-        'accuracy': telemetry.accuracy,
-        'altitude': telemetry.altitude,
-        'speed': telemetry.speed,
-        'course': telemetry.course,
-        'battery': telemetry.battery,
-        'extra': json.dumps(telemetry.model_dump(mode='json')['extra']) if telemetry.extra is not None else None
+    params = {
+        "p_payload_id": payload_id,
+        "p_data_time": telemetry.data_time.isoformat() if telemetry.data_time else None,
+        "p_longitude": telemetry.longitude,
+        "p_latitude": telemetry.latitude,
+        "p_accuracy": getattr(telemetry, 'accuracy', None),
+        "p_altitude": getattr(telemetry, 'altitude', None),
+        "p_speed": getattr(telemetry, 'speed', None),
+        "p_course": getattr(telemetry, 'course', None),
+        "p_battery": getattr(telemetry, 'battery', None),
+        "p_extra": json.dumps(telemetry.extra) if hasattr(telemetry, 'extra') and telemetry.extra else None
     }
+    # Convert JSON string to None if it's empty, as the function expects jsonb or NULL
+    if params["p_extra"] == 'null' or not params["p_extra"]:
+        params["p_extra"] = None
 
     sql_query = """
-    INSERT INTO public.telemetry (
-        payload_id, data_time, position, accuracy, altitude,
-        speed, course, battery, extra
-    ) VALUES (
-        :payload_id, :data_time, ST_SetSRID(ST_MakePoint(:longitude, :latitude), 4326),
-        :accuracy, :altitude, :speed, :course, :battery, :extra
-    )
-    ON CONFLICT (payload_id, data_time)
-    DO UPDATE SET
-        position = CASE
-                     WHEN EXCLUDED.accuracy IS NOT NULL AND (telemetry.accuracy IS NOT NULL AND EXCLUDED.accuracy < telemetry.accuracy)
-                     THEN EXCLUDED.position
-                     ELSE telemetry.position
-                   END,
-        accuracy = CASE
-                     WHEN EXCLUDED.accuracy IS NOT NULL AND (telemetry.accuracy IS NOT NULL AND EXCLUDED.accuracy < telemetry.accuracy)
-                     THEN EXCLUDED.accuracy
-                     ELSE telemetry.accuracy
-                   END,
-        altitude = CASE
-                        WHEN EXCLUDED.altitude IS NOT NULL AND (telemetry.altitude IS NULL)
-                        THEN EXCLUDED.altitude
-                        ELSE telemetry.altitude
-                    END,
-        speed = CASE
-                    WHEN EXCLUDED.speed IS NOT NULL AND (telemetry.speed IS NULL)
-                    THEN EXCLUDED.speed
-                    ELSE telemetry.speed
-                END,
-        course = CASE
-                     WHEN EXCLUDED.course IS NOT NULL AND (telemetry.course IS NULL)
-                     THEN EXCLUDED.course
-                     ELSE telemetry.course
-                 END,
-        battery = CASE
-                     WHEN EXCLUDED.battery IS NOT NULL AND (telemetry.battery IS NULL)
-                     THEN EXCLUDED.battery
-                     ELSE telemetry.battery
-                 END,
-        extra = CASE
-                    WHEN EXCLUDED.extra IS NOT NULL AND (telemetry.extra IS NULL)
-                    THEN EXCLUDED.extra
-                    ELSE telemetry.extra
-                END,
-        last_updated = (now() AT TIME ZONE 'utc')
-    RETURNING id, xmax;
+    SELECT result_id, was_inserted
+    FROM upsert_telemetry_complex(
+        :p_payload_id,
+        :p_data_time,
+        :p_longitude,
+        :p_latitude,
+        :p_accuracy,
+        :p_altitude,
+        :p_speed,
+        :p_course,
+        :p_battery,
+        :p_extra
+    );
     """
 
     # --- Execute UPSERT ---
@@ -341,21 +338,22 @@ def upload_telemetry(telemetry: ParsedPacket, payload_id: int) -> tuple[uuid.UUI
 
         if result_row:
             telemetry_id = result_row[0]
-            xmax_val = result_row[1]
+            was_inserted = result_row[1]
 
             if isinstance(telemetry_id, uuid.UUID):
-                # xmax = 0 indicates the row was newly inserted by this transaction
-                # xmax != 0 indicates the row existed and was potentially updated (or just locked) by this transaction
-                if xmax_val is not None:
-                    # Check if xmax is an integer (or can be converted to one)
-                    try:
-                        xmax_val = int(xmax_val)
-                    except ValueError:
-                        logger.error(f"Unexpected xmax value type: {type(xmax_val)} for telemetry ID: {telemetry_id}")
+                if was_inserted is not None:
+                    # Check if is a boolean or convertible to boolean
+                    if isinstance(was_inserted, bool):
+                        pass
+                    elif isinstance(was_inserted, int):
+                        was_inserted = bool(was_inserted)
+                    elif isinstance(was_inserted, str):
+                        was_inserted = was_inserted.lower() in ['true', '1']
+                    else:
+                        logger.error(f"Unexpected was_inserted value type: {type(was_inserted)} for telemetry ID: {telemetry_id}")
                         raise
-                was_inserted = (xmax_val == 0)
                 action = "inserted" if was_inserted else "updated/found"
-                logger.info(f"Telemetry {action}. ID: {telemetry_id} for payload {payload_id} (xmax={xmax_val})")
+                logger.info(f"Telemetry {action}. ID: {telemetry_id} for payload {payload_id}")
                 return telemetry_id, was_inserted # Return tuple (id, was_inserted_boolean)
             else:
                  # Should not happen if RETURNING id works
@@ -382,24 +380,29 @@ def upload_telemetry(telemetry: ParsedPacket, payload_id: int) -> tuple[uuid.UUI
         logger.error(f"Unexpected error during telemetry upsert for payload {payload_id}: {e}", exc_info=True)
         raise
 
-# ---------------------------------
-# --- Materialized View Functions ---
-# ---------------------------------
+# ------------------------------
+# --- Refresh Bins Functions ---
+# ------------------------------
 
-def refresh_materialized_view(view_name: str):
+def refresh_bins():
     """
-    Refresh a materialized view in the
-    database.
-    Args:
-        view_name (str): The name of the materialized view to refresh.
+    Refresh the bins for the payload paths.
     """
-    sql_query = f"REFRESH MATERIALIZED VIEW CONCURRENTLY {view_name};"
+    sql_query = "SELECT public.update_payload_paths_binned();"
     try:
-        execute_update(sql_query)
-        logger.info(f"Materialized view {view_name} refreshed successfully.")
-    except SQLAlchemyError as e:
-        logger.error(f"Failed to refresh materialized view {view_name}: {e}", exc_info=True)
-        raise
+        affected_rows = execute_update(sql_query)
+
+        # Validate the return type (should be an integer)
+        if affected_rows is None:
+            logger.error("No rows affected during bins refresh.")
+            return None
+        elif isinstance(affected_rows, int):
+            logger.info(f"update_payload_paths_binned reported {affected_rows} rows affected.")
+            return affected_rows
+        else:
+             # Log unexpected return types
+             logger.warning(f"update_payload_paths_binned returned unexpected type via execute_update: {type(affected_rows)} ({affected_rows}). Expected int.")
+             return None
     except Exception as e:
-        logger.error(f"Unexpected error during materialized view refresh: {e}", exc_info=True)
-        raise
+        logger.error(f"Unexpected error during materialized view refresh: {e}", exc_info=False)
+        return None

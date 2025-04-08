@@ -49,7 +49,7 @@ def process_lora(self, raw_data_item):
     # try to parse the LoRa payload
     parsed_payload = None
     try:
-        parsed_payload = process_json_msg(raw_message.payload)
+        parsed_payload = process_json_msg(raw_message.payload, "LoRa")
         logger.debug(f"Parsed payload: {parsed_payload}")
     except json.JSONDecodeError as e:
         logger.error(f"Failed to decode JSON payload: {e}")

@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from typing import Optional, Union
 import uuid
 
-from aprspy import APRS
+import aprslib
 
 # Define constants for clarity (match with watcher.py and celery.py queue defs)
 APRS_RAW_LIST = 'aprs'  # The Redis list the watcher monitors
@@ -51,65 +51,8 @@ def process_aprs(self, raw_data_item):
 
     # try to parse the APRS payload
     try:
-        packet = APRS.parse(raw_message.payload)
-        parsed_aprs['callsign'] = packet.source
-        parsed_aprs['latitude'] = packet.latitude
-        parsed_aprs['longitude'] = packet.longitude
-        parsed_aprs['accuracy'] = packet.ambiguity
-        if packet.altitude is not None:
-            parsed_aprs['altitude'] = packet.altitude
-        elif " ft" in packet.comment:
-            # Extract altitude from comment if available
-            try:
-                altitude_feet = int(packet.comment.split(" ")[0])
-                parsed_aprs['altitude'] = altitude_feet * 0.3048  # Convert feet to meters
-            except ValueError:
-                logger.warning(f"Could not parse altitude from comment: {packet.comment}")
-        parsed_aprs['speed'] = packet.speed
-        parsed_aprs['course'] = packet.course
-        parsed_aprs['comment'] = packet.comment
-        parsed_aprs['symbol_id'] = packet.symbol_id
-        parsed_aprs['symbol_table'] = packet.symbol_table
-        parsed_aprs['path'] = str(packet.path) if packet.path else None
-        parsed_aprs['data_type_id'] = packet.data_type_id
-        parsed_aprs['destination'] = packet.destination
-        parsed_aprs['data_time'] = packet.timestamp if packet.timestamp else raw_message.timestamp
-
-        # if packet = 'KF8ABL-11>APRS,WIDE2-1:!4217.67N/08342.78WO010/005100 ft'
-        # >>> packet.data_type_id
-        # '!'
-        # >>> packet.destination
-        # 'APRS'
-        # >>> packet.info
-        # '4217.67N/08342.78WO010/005100 ft'
-        # >>> packet.path
-        # <Path: WIDE2-1>
-        # >>> packet.source
-        # 'KF8ABL-11'
-        # >>> packet.symbol_id
-        # 'O'
-        # >>> packet.symbol_table
-        # '/'
-        # >>> packet.latitude
-        # 42.2945
-        # >>> packet.longitude
-        # -83.713
-        # >>> packet.altitude
-        # TODO: brian new packet with this working??
-        # >>> packet.course
-        # 10
-        # >>> packet.speed
-        # 5
-        # >>> packet.comment
-        # '100 ft'
-        # >>> packet.ambiguity
-        # 0
-        # >>> packet.compressed
-        # False
-        # >>> packet.messaging
-        # False
-        # >>> packet.point
-        # Point(42.2945, -83.713, None)
+        packet = aprslib.parse(raw_message.payload)
+        parsed_aprs = packet
     
     except Exception as e:
         logger.error(f"Failed to parse APRS payload: {e}")
@@ -118,7 +61,7 @@ def process_aprs(self, raw_data_item):
     # now we try to parse the payload as JSON
     parsed_payload = None
     try:
-        parsed_payload = process_json_msg(parsed_aprs)
+        parsed_payload = process_json_msg(parsed_aprs, "APRS")
         logger.debug(f"Parsed payload: {parsed_payload}")
     except json.JSONDecodeError as e:
         logger.error(f"Failed to decode JSON payload: {e}")

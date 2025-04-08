@@ -18,7 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .core import database, redis_client  # Relative imports
 from .core.config import settings
-from .routers import ingress, map_data, websockets
+from .routers import ingress, map_data
 
 # --- Logging Configuration ---
 logging.basicConfig(level=settings.LOG_LEVEL)
@@ -30,13 +30,13 @@ async def lifespan(app: FastAPI):
     # Startup
     log.info("Application startup...")
     await database.connect_db()
-    await redis_client.connect_redis()
+    await redis_client.create_redis_clients()
     await redis_client.start_pubsub_listener()  # Start the background listener task
     yield
     # Shutdown
     log.info("Application shutdown...")
     await redis_client.stop_pubsub_listener()
-    await redis_client.close_redis()
+    await redis_client.close_redis_clients()
     await database.close_db()
     log.info("Application shutdown complete.")
 
@@ -83,7 +83,8 @@ async def health_check():
 
     # Check Redis connection
     try:
-        await redis_client.redis_client.ping()
+        await redis_client.redis_pubsub_client.ping()
+        await redis_client.redis_cache_client.ping()
         redis_status = "OK"
     except Exception as e:
         redis_status = f"Error: {e}"

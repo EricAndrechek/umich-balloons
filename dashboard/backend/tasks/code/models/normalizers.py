@@ -1,5 +1,6 @@
 import json
 import re
+import math
 from typing import Optional, Union, Any, Literal, Dict, List, Set
 from pydantic import (
     BaseModel,
@@ -12,6 +13,10 @@ from pydantic import (
 import logging
 
 log = logging.getLogger(__name__)
+
+# --- Constants ---
+METERS_PER_MINUTE_LAT = 1852.0   # Approx meters per minute of latitude (1 nautical mile)
+METERS_PER_DEGREE_LAT = 111195.0 # Approx meters per degree of latitude (average)
 
 # Altitude -> Meters
 ALTITUDE_CONVERSIONS_TO_METERS: Dict[str, float] = {
@@ -179,3 +184,89 @@ def normalize_voltage(value: Any) -> Optional[float]:
     log.debug(f"Returning normalized voltage: {v_float:.2f}V")
     return v_float # Return as float
 
+def get_precision_radius(data_type, ambiguity=None, cep_m=None, lora_base_decimals=4):
+    """
+    Calculates the normalized radial precision in meters based on data source specifics.
+
+    Args:
+        data_type (str): The source of the data ('APRS', 'LoRa', 'Iridium').
+                         Case-insensitive.
+        ambiguity (int, optional): Number of ambiguous trailing digits (replaced by spaces).
+                                    Applies to 'APRS' and 'LoRa'.
+                                    Defaults to 0 if None (meaning full precision).
+        cep_m (float, optional): Circular Error Probable in meters.
+                                 Applies only to 'Iridium'. Required for 'Iridium'.
+        lora_base_decimals (int, optional): The standard number of decimal places for LoRa
+                                            coordinates when ambiguity is 0. Defaults to 4.
+                                            Assumes DD.dddd format as the base.
+
+    Returns:
+        float: The estimated radius of uncertainty in meters.
+
+    Raises:
+        ValueError: If inputs are invalid or inconsistent (e.g., missing cep_m for Iridium,
+                    invalid data_type, negative ambiguity/cep).
+    """
+    # Normalize data_type input
+    data_type = str(data_type).upper()
+
+    if data_type == 'IRIDIUM':
+        if cep_m is None:
+            raise ValueError("cep_m (CEP in meters) must be provided for data_type 'Iridium'.")
+        if not isinstance(cep_m, (int, float)) or cep_m < 0:
+             raise ValueError("cep_m must be a non-negative number.")
+        # For Iridium, the CEP is the direct measure of precision radius
+        return float(cep_m)
+
+    # --- Handle APRS and LoRa ---
+
+    # Set default ambiguity if not provided
+    current_ambiguity = ambiguity if ambiguity is not None else 0
+
+    # attempt to convert ambiguity to int
+    if not isinstance(current_ambiguity, int):
+        try:
+            current_ambiguity = int(current_ambiguity)
+        except ValueError:
+            raise ValueError(f"ambiguity must be an integer. Got: {type(current_ambiguity)} with value {current_ambiguity}")
+
+    # Validate ambiguity
+    if not isinstance(current_ambiguity, int) or current_ambiguity < 0:
+         raise ValueError("ambiguity must be a non-negative integer.")
+
+    if data_type == 'APRS':
+        # APRS precision is based on DDMM.mm format.
+        # Base precision (ambiguity=0) is 0.01 minutes.
+        # Each level of ambiguity multiplies the smallest step by 10.
+        # Precision step size = 0.01 * (10 ** ambiguity) minutes
+        # Radius is half the step size.
+        radius_minutes = 0.5 * 0.01 * (10 ** current_ambiguity)
+        # Convert radius from minutes to meters using latitude approximation
+        radius_meters = radius_minutes * METERS_PER_MINUTE_LAT
+        return radius_meters
+
+    elif data_type == 'LORA':
+        # LoRa precision is based on DD.dddd format (by default 4 decimal places).
+        # Validate lora_base_decimals
+        if not isinstance(lora_base_decimals, int) or lora_base_decimals < 0:
+              raise ValueError("lora_base_decimals must be a non-negative integer.")
+
+        # Determine the number of valid decimal places after accounting for ambiguity
+        valid_decimal_places = lora_base_decimals - current_ambiguity
+
+        # Ensure precision doesn't become nonsensically large (e.g., > 1 degree)
+        # Cap effective decimal places at 0 (meaning precision to the nearest whole degree)
+        if valid_decimal_places < 0:
+            print(f"Warning: Ambiguity ({current_ambiguity}) exceeds lora_base_decimals ({lora_base_decimals}). Capping precision to nearest degree.")
+            valid_decimal_places = 0
+
+        # Precision step size = 10 ^ (-valid_decimal_places) degrees
+        # Radius is half the step size.
+        radius_degrees = 0.5 * (10 ** (-valid_decimal_places))
+        # Convert radius from degrees to meters using latitude approximation
+        radius_meters = radius_degrees * METERS_PER_DEGREE_LAT
+        return radius_meters
+
+    else:
+        # Handle unrecognized data type
+        raise ValueError("data_type must be one of 'APRS', 'LoRa', or 'Iridium'.")
