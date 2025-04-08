@@ -45,3 +45,32 @@ body {
 .maplibregl-popup-close-button {
   @apply text-lg text-gray-600 hover:text-gray-900;
 }
+
+.maplibregl-popup-content {
+  padding: 0;
+  /* Remove default padding if adding it inside HTML */
+  /* font-family: sans-serif; // Set base font if needed */
+  /* box-shadow: 0 1px 3px rgba(0,0,0,0.2); */
+  /* max-width: 350px !important; /* Ensure max-width override if needed */
+}
+
+.balloon-popup .maplibregl-popup-close-button {
+  /* Style the close button if desired */
+  font-size: 1.5rem;
+  padding: 0.1rem 0.5rem;
+  color: #555;
+}
+
+/* Add styles for elements inside the popup */
+.balloon-popup h3 {
+  /* Styles for the title */
+  /* background-color: #f0f0f0; */
+  /* padding: 0.5rem; */
+  /* border-bottom: 1px solid #ddd; */
+}
+
+.balloon-popup ul {
+  /* Styles for the telemetry list */
+  /* margin-left: 1.5rem; */
+  /* margin-bottom: 0.5rem; */
+}

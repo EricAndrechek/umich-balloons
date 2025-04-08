@@ -1,6 +1,6 @@
 // src/cache.js
 
-import * as state from "./state.js";
+import { state } from "./state.js";
 import * as config from "./config.js";
 
 /** Saves the current map data state to localStorage */

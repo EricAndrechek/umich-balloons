@@ -1,6 +1,6 @@
 // src/ui.js
 
-import * as state from "./state.js";
+import { state } from "./state.js";
 
 // --- DOM Elements ---
 export const mapContainer = document.getElementById("map");

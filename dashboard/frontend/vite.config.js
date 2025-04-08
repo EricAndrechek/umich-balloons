@@ -14,9 +14,10 @@ export default defineConfig({
             },
             manifest: {
                 // Basic PWA manifest
-                name: "Realtime Map Tracker (Vanilla)",
-                short_name: "MapTracker VJS",
-                description: "Displays real-time payload locations.",
+                name: "Umich-Balloons Realtime High-Altitude Balloon Map Tracker",
+                short_name: "Umich-Balloons",
+                description:
+                    "Track high-altitude balloons in real-time with our interactive map.",
                 theme_color: "#ffffff",
                 background_color: "#ffffff",
                 display: "standalone",
