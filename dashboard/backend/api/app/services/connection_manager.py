@@ -1,3 +1,4 @@
+from dis import disco
 from fastapi import WebSocket
 from typing import Dict, Set, List
 import json
@@ -117,11 +118,71 @@ class ConnectionManager:
 
     async def broadcast_to_room(self, gh_str: str, message: str):
         """Broadcasts a message to all websockets in tiered hieracrchy of geohash string"""
+        # first try broadcasting to the payload_id in the message, if it exists
+        try:
+            if "data" in message:
+                data = json.loads(message)["data"]
+                if "payload_id" in data:
+                    payload_id = data["payload_id"]
+                    if payload_id in self.room_connections:
+                        await self._broadcast_to_room(payload_id, message)
+                        return
+        except json.JSONDecodeError:
+            log.error(f"Error decoding JSON from message: {message}")
+
         for i in range(len(gh_str), 0, -1):
             # Check if the room exists at the current level
             room = gh_str[:i]
             if room in self.room_connections:
                 await self._broadcast_to_room(room, message)
+
+    async def add_to_raw(self, websocket: WebSocket):
+        """Adds a websocket to the raw-messages channel."""
+        if "raw-messages" not in self.room_connections:
+            self.room_connections["raw-messages"] = set()
+        self.room_connections["raw-messages"].add(websocket)
+        self.socket_subscriptions[websocket].add("raw-messages")
+        log.debug(
+            f"WebSocket {websocket.client.host} added to raw-messages channel"
+        )
+
+    async def remove_from_raw(self, websocket: WebSocket):
+        """Removes a websocket from the raw-messages channel."""
+        if "raw-messages" in self.room_connections:
+            self.room_connections["raw-messages"].discard(websocket)
+            if not self.room_connections["raw-messages"]:
+                del self.room_connections["raw-messages"]
+        if websocket in self.socket_subscriptions:
+            self.socket_subscriptions[websocket].discard("raw-messages")
+
+    async def broadcast_raw_msg(self, message):
+        """Broadcasts to any clients on the raw-messages channel."""
+        if isinstance(message, dict):
+            # Convert the message to JSON string
+            message_str = json.dumps(message)
+        elif isinstance(message, str):
+            message_str = message
+        else:
+            log.error(f"Invalid message type: {type(message)}. Expected str or dict.")
+            return
+        log.info(f"Broadcasting raw message: {message_str[:100]}...")
+
+        # Send to all connections in raw-messages channel
+        disconnected_sockets = set()
+        # Create a copy of the set to iterate over, as disconnect can modify it
+        sockets_in_room = list(self.room_connections.get("raw-messages", []))
+        for websocket in sockets_in_room:
+            try:
+                await websocket.send_text(message_str)
+            except Exception as e:
+                # Mark socket for disconnection if sending fails
+                log.error(
+                    f"Error broadcasting to {websocket.client.host}: {e}. Marking for disconnect."
+                )
+                disconnected_sockets.add(websocket)
+        # Clean up disconnected sockets after broadcast iteration
+        for websocket in disconnected_sockets:
+            self.disconnect(websocket)
 
     async def broadcast(self, message: str):
         for connection in self.active_connections:

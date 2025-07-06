@@ -97,17 +97,19 @@ IGTXLIMIT 6 10
 ```
 
 ```bash
-sudo nano /lib/systemd/system/aprs.service
+sudo rm /lib/systemd/system/direwolf.service
+sudo nano /etc/systemd/system/direwolf.service
 
- [Unit]
- Description=APRS Gateway
+[Unit]
+ Description=RTL_SDR Direwolf
  After=multi-user.target
 
  [Service]
  Type=idle
  WorkingDirectory=/home/gs
  ExecStart=/bin/bash /home/gs/direwolf.sh
- Restart=always
+ Restart=on-failure
+ RestartSec=15
 
  [Install]
  WantedBy=multi-user.target
@@ -169,10 +171,11 @@ chmod +x /home/gs/aprs.py
 sudo nano /etc/systemd/system/aprspy.service
 
 [Unit]
-Description=Direwolf APRS to API Forwarder
+[Unit]
+Description=KISS APRS to API Forwarder
 # Make sure Direwolf is running first, and network is up
-Requires=aprs.service
-After=network.target aprs.service
+Requires=direwolf.service
+After=network.target direwolf.service
 
 [Service]
 ExecStart=/usr/bin/python3 /home/gs/aprs.py
@@ -180,9 +183,9 @@ WorkingDirectory=/home/gs/
 StandardOutput=journal
 StandardError=journal
 Restart=on-failure
-RestartSec=15          
+RestartSec=15
 # Wait a bit longer before restarting
-User=gs                
+User=gs
 # Run as 'pi' user (or your user)
 # No specific group needed unless log file permissions require it
 
@@ -203,6 +206,20 @@ journalctl -u aprspy.service -f
 
 
 pip3 install fastapi uvicorn websockets "python-multipart" --break-system-packages
+
+# copy log_server.py to /home/gs
+chmod +x /home/gs/log_server.py
+
+pip3 install psutil --break-system-packages
+sudo apt install wireless-tools -y
+
+sudo usermod -a -G systemd-journal $USER
+
+# need to reboot here
+
+sudo visudo
+gs ALL=(ALL) NOPASSWD: /sbin/reboot
+
 
 sudo nano /etc/systemd/system/log-viewer.service
 

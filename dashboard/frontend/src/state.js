@@ -1,20 +1,25 @@
 // src/state.js
 
 export const state = {
-    // ... (existing state variables: map, webSocket, connectionStatus, etc.) ...
     map: null,
     webSocket: null,
     connectionStatus: "disconnected",
     retryTimeout: null,
     retryCount: 0,
-    mapLineData: { type: "FeatureCollection", features: [] },
-    mapLatestPointData: { type: "FeatureCollection", features: [] },
-    latestCoords: new Map(),
 
-    // --- New State Variables ---
-    /** Stores fetched details: Map<payload_id, detailsObject> */
+    // --- Data Stores ---
+    /** Raw coordinate store: Map<payloadId, Map<timestamp_ms_adjusted, [lon, lat]>> */
+    payloadCoordsByTime: new Map(),
+    /** Cache for balloon details: Map<payload_id, detailsObject> */
     payloadDetailsCache: new Map(),
     /** Tracks pending detail requests: Set<payload_id> */
     pendingDetailRequests: new Set(),
-    // --- End New State Variables ---
+
+    // --- Map Data (Generated from payloadCoordsByTime) ---
+    /** Generated LineString features for map: FeatureCollection */
+    mapLineData: { type: "FeatureCollection", features: [] },
+    /** Generated Point features for map: FeatureCollection */
+    mapLatestPointData: { type: "FeatureCollection", features: [] },
+    /** Latest coordinate for extending dynamic lines/placing points: Map<payload_id, [lon, lat]> */
+    latestCoords: new Map(),
 };

@@ -4,7 +4,7 @@ import { state } from "./state.js";
 import * as config from "./config.js";
 import * as ui from "./ui.js";
 import * as cache from "./cache.js";
-import * as dataProcessor from "./dataProcessor.js";
+import { processIncomingSegments, handleNewPosition, regenerateMapFeatures } from "./dataProcessor.js";
 import { updateMapSource, updatePopupContent } from "./map.js";
 import geohash from "ngeohash"; // For initial data request
 
@@ -78,6 +78,8 @@ export function requestDetailsIfNeeded(payloadId) {
     ) {
         console.log(`Details for ${payloadId} not cached. Requesting...`);
         state.pendingDetailRequests.add(payloadId); // Mark as pending
+
+        // TODO: change to new websocket hook
         sendMessage({
             type: "getBalloonDetails",
             payload: { payload_id: payloadId },
@@ -143,31 +145,20 @@ export function connectWebSocket() {
         try {
             const message = JSON.parse(event.data);
             const msgType = message.type;
-            let updateResult = {
-                needsLineUpdate: false,
-                needsPointUpdate: false,
-            };
-            let segmentsProcessed = false;
 
-            // console.debug("Received WS Message:", msgType); // Verbose
+            let affectedPayloads = new Set();
+            let needsPointSourceUpdateFromDetails = false; // For label updates
 
             switch (msgType) {
                 case "initialPathSegments":
                 case "catchUpPathSegments":
-                    // --- MODIFICATION START ---
-                    // Check if data is the array structure received from backend
                     if (Array.isArray(message.data)) {
                         const receivedSegments = message.data;
-                        console.log(
-                            `Processing ${receivedSegments.length} segments from ${msgType}...`
-                        );
-
-                        // Create a valid FeatureCollection to pass downstream
+                        // Construct features (same as before)
                         const featureCollection = {
                             type: "FeatureCollection",
                             features: [],
                         };
-
                         receivedSegments.forEach((segmentData) => {
                             try {
                                 // --- Data Validation ---
@@ -194,23 +185,42 @@ export function connectWebSocket() {
                                     segmentData.path_segment_geojson
                                 );
 
-                                // --- Geometry Validation ---
+                                // --- MODIFIED Geometry Validation (Allow Point OR LineString) ---
+                                let isValidGeometry = false;
+                                let geometryType = geometry?.type;
+
                                 if (
-                                    geometry?.type !== "LineString" ||
-                                    !Array.isArray(geometry.coordinates) ||
-                                    geometry.coordinates.length < 2
+                                    geometryType === "LineString" &&
+                                    Array.isArray(geometry.coordinates) &&
+                                    geometry.coordinates.length >= 1
                                 ) {
+                                    // Basic LineString validation (processLineStringFeature does more specific checks later)
+                                    isValidGeometry = true;
+                                } else if (
+                                    geometryType === "Point" &&
+                                    Array.isArray(geometry.coordinates) &&
+                                    geometry.coordinates.length === 2 &&
+                                    typeof geometry.coordinates[0] ===
+                                        "number" &&
+                                    typeof geometry.coordinates[1] === "number"
+                                ) {
+                                    // Valid Point
+                                    isValidGeometry = true;
+                                }
+
+                                if (!isValidGeometry) {
+                                    // Log specific reason
                                     console.warn(
-                                        `Parsed GeoJSON is not a valid LineString in ${msgType} for payload ${segmentData.payload_id}:`,
+                                        `Parsed GeoJSON is not a valid LineString or Point in ${msgType} for payload ${payloadId}. Type: ${geometryType}`,
                                         geometry
                                     );
-                                    return; // Skip this segment
+                                    return; // Skip this segment if neither valid LineString nor Point
                                 }
 
                                 const payloadId = segmentData.payload_id;
 
                                 // --- Trigger Detail Request ---
-                                // (This part remains the same logic)
+                                // TODO: this hook changed on backend
                                 requestDetailsIfNeeded(payloadId);
 
                                 // --- Construct GeoJSON Feature ---
@@ -241,17 +251,12 @@ export function connectWebSocket() {
                             }
                         }); // End forEach
 
-                        // --- Process the constructed FeatureCollection ---
                         if (featureCollection.features.length > 0) {
                             console.log(
-                                `Passing ${featureCollection.features.length} constructed features to processPathSegments.`
+                                `Passing ${featureCollection.features.length} constructed features (Points/LineStrings) to processIncomingSegments.`
                             );
-                            // Call the processor with the correctly formatted FeatureCollection
-                            segmentsProcessed =
-                                dataProcessor.processPathSegments(
-                                    featureCollection
-                                );
-                            updateResult.needsLineUpdate = segmentsProcessed;
+                            affectedPayloads =
+                                processIncomingSegments(featureCollection); // processIncomingSegments already handles both types
                         } else {
                             console.log(
                                 `No valid features constructed from ${msgType} data.`
@@ -269,69 +274,25 @@ export function connectWebSocket() {
                 case "newPosition":
                     if (message.data?.payload_id != null) {
                         // Trigger detail request if this ID is new
+                        // TODO: this hook changed need to modify
                         requestDetailsIfNeeded(message.data.payload_id);
-                        updateResult = dataProcessor.handleNewPosition(
-                            message.data
-                        );
+                        affectedPayloads = handleNewPosition(message.data);
                     } else {
                         console.warn("Invalid newPosition data:", message.data);
                     }
                     break;
                 // --- Handle Balloon Details Response ---
                 case "balloonDetailsResponse":
-                    if (message.data && message.payload_id != null) {
-                        const payloadId = message.payload_id;
-                        console.debug(
-                            `Received balloon details for ${payloadId}:`,
-                            message.data
-                        );
-
-                        // --- Cache the data ---
+                    if (message.data && message.data.payload_id != null) {
+                        const payloadId = message.data.payload_id;
+                        // Cache details (same as before)
                         state.payloadDetailsCache.set(payloadId, message.data);
-                        state.pendingDetailRequests.delete(payloadId); // Remove from pending
-
-                        // --- Update the corresponding point feature for label ---
-                        const pointFeatureIndex =
-                            state.mapLatestPointData.features.findIndex(
-                                (f) => f.properties?.payload_id === payloadId
-                            );
-                        if (pointFeatureIndex > -1) {
-                            const feature =
-                                state.mapLatestPointData.features[
-                                    pointFeatureIndex
-                                ];
-                            // Add/update the property used for the label (e.g., 'balloon_name')
-                            // Make sure 'balloon_name' exists in your response data
-                            feature.properties.callsign =
-                                message.data.balloon_name || `ID: ${payloadId}`; // Fallback label
-                            // Optionally add all details if useful for popup directly
-                            // feature.properties.details = message.data;
-
-                            // Ensure a new object reference for reactivity if needed, though modifying properties often works
-                            state.mapLatestPointData.features[
-                                pointFeatureIndex
-                            ] = {
-                                ...feature,
-                                properties: { ...feature.properties },
-                            };
-                            state.mapLatestPointData = {
-                                ...state.mapLatestPointData,
-                                features: [
-                                    ...state.mapLatestPointData.features,
-                                ],
-                            };
-
-                            needsPointSourceUpdate = true; // Signal that the point source needs updating for the label
-                            console.log(
-                                `Updated feature ${feature.id} with callsign: ${feature.properties.callsign}`
-                            );
-                        } else {
-                            console.warn(
-                                `Received details for ${payloadId}, but no matching point feature found.`
-                            );
-                        }
-                        // Call the imported function to update the popup content
-                        updatePopupContent(message.payload_id, message.data);
+                        state.pendingDetailRequests.delete(payloadId);
+                        // Mark this payload as needing feature regeneration (to update label)
+                        affectedPayloads.add(payloadId);
+                        needsPointSourceUpdateFromDetails = true; // Flag that point properties changed
+                        // Update popup if open
+                        updatePopupContent(payloadId, message.data);
                     } else {
                         console.warn(
                             "Invalid balloonDetailsResponse received:",
@@ -351,20 +312,41 @@ export function connectWebSocket() {
                     console.warn("Unknown WebSocket message type:", msgType);
             }
 
-            // --- Post-processing: Update map sources and cache if necessary ---
+            // --- Post-processing: Regenerate features and Update map sources ---
+            let updateResult = {
+                needsLineUpdate: false,
+                needsPointUpdate: false,
+            };
+            if (affectedPayloads.size > 0) {
+                // Regenerate GeoJSON features for affected payloads
+                updateResult = regenerateMapFeatures(affectedPayloads);
+            } else if (needsPointSourceUpdateFromDetails) {
+                // If only details arrived, still need to potentially regenerate points for labels
+                // NOTE: regenerateMapFeatures handles this already if affectedPayloads includes the ID
+                // This path might not be strictly needed if details response always adds to affectedPayloads
+                console.warn(
+                    "Details arrived, but no coordinates updated? Check affectedPayloads logic."
+                );
+            }
+
+            // Update map sources based on regeneration results
             if (updateResult.needsLineUpdate) {
+                console.log("Calling updateMapSource for map-lines");
                 updateMapSource("map-lines", state.mapLineData);
             }
+            // Update points if regeneration indicated changes (covers new coords AND label updates)
             if (updateResult.needsPointUpdate) {
-                const featureToSend = state.mapLatestPointData.features.find(
-                    (f) => f.id === `latest-${message.data?.payload_id}`
+                console.log(
+                    `Calling updateMapSource for map-latest-points. Reason: Regeneration needed.`
                 );
                 updateMapSource("map-latest-points", state.mapLatestPointData);
             }
-            // Save cache if any relevant data changed
-            if (updateResult.needsLineUpdate || updateResult.needsPointUpdate) {
-                cache.saveDataToCache();
-            }
+            // Save geo data cache if lines or points were changed by regeneration
+            // NOTE: Need to update cache logic to save/load state.payloadCoordsByTime
+            // if (updateResult.needsLineUpdate || updateResult.needsPointUpdate) {
+            //     cache.saveDataToCache(); // <<< Needs Cache Update
+            // }
+
         } catch (error) {
             console.error(
                 "Failed to parse/handle WebSocket message:",

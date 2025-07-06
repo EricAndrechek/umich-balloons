@@ -474,91 +474,101 @@ create index if not exists raw_messages_telemetry_id_idx
 -- Calculates intersecting geohashes for a given line geometry.
 -- Used by the incremental update query.
 
-CREATE OR REPLACE FUNCTION public.calculate_intersecting_geohashes(
-    line_geom GEOMETRY,         -- Input LineString
-    geohash_precision INTEGER DEFAULT 7 -- Desired geohash precision
-)
-RETURNS TEXT[] -- Returns an array of unique geohash strings
+CREATE OR REPLACE FUNCTION public.generate_geohash_prefixes(full_hash TEXT)
+RETURNS TEXT[]
 LANGUAGE plpgsql
-IMMUTABLE -- Can be marked IMMUTABLE as output depends only on input
+IMMUTABLE -- Depends only on input
+STRICT    -- Returns NULL if input is NULL
 AS $$
 DECLARE
-    -- Segmentize roughly based on geohash precision size (~150m for p7)
-    -- Make segment length slightly smaller to ensure coverage across boundaries
-    segment_length FLOAT := 100.0; -- Segmentize line every 100m
+    prefixes TEXT[] := ARRAY[]::TEXT[];
+    i INTEGER;
+BEGIN
+    -- No need to check for NULL here due to STRICT option
+    -- No need to check length > 0, loop won't run if length is 0
+    FOR i IN 1..length(full_hash) LOOP
+        prefixes := array_append(prefixes, substring(full_hash from 1 for i));
+    END LOOP;
+    RETURN prefixes;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.calculate_intersecting_geohashes(
+    line_geom GEOMETRY,
+    geohash_precision INTEGER DEFAULT 5 -- Target precision for calculation
+)
+RETURNS TEXT[]
+LANGUAGE plpgsql
+IMMUTABLE
+SET search_path = public, pg_catalog
+AS $$
+DECLARE
+    segment_length FLOAT := 100.0;
     geohash_set TEXT[] := ARRAY[]::TEXT[];
-    segment GEOMETRY;
-    temp_point GEOMETRY;
+    point GEOMETRY;
     bbox GEOMETRY;
     bbox_center GEOMETRY;
-    gh TEXT;
+    gh TEXT; -- Full precision geohash
     geom_srid INTEGER;
 BEGIN
-    -- Handle NULL or empty input geometry
-    IF line_geom IS NULL OR ST_IsEmpty(line_geom) THEN
-        RETURN geohash_set;
-    END IF;
-
+    IF line_geom IS NULL OR ST_IsEmpty(line_geom) THEN RETURN geohash_set; END IF;
     geom_srid := ST_SRID(line_geom);
-    IF geom_srid IS NULL OR geom_srid = 0 THEN geom_srid := 4326; END IF; -- Assume 4326 if missing
+    IF geom_srid IS NULL OR geom_srid = 0 THEN geom_srid := 4326; END IF;
 
     -- Handle Point geometry
     IF ST_GeometryType(line_geom) = 'ST_Point' THEN
-        temp_point := line_geom;
-        -- Cast point to geography before geohashing
-        gh := ST_GeoHash(temp_point::geography, geohash_precision);
-        IF gh IS NOT NULL THEN geohash_set := array_append(geohash_set, gh); END IF;
-        RETURN ARRAY(SELECT DISTINCT unnest(geohash_set));
+        point := line_geom;
+        gh := ST_GeoHash(point::geography, geohash_precision);
+        -- Append prefixes using the helper function
+        geohash_set := array_cat(geohash_set, public.generate_geohash_prefixes(gh));
+        RETURN ARRAY(SELECT DISTINCT unnest(geohash_set) ORDER BY 1);
     END IF;
 
     -- Handle non-LineString/MultiLineString
     IF ST_GeometryType(line_geom) NOT LIKE 'ST_LineString' AND ST_GeometryType(line_geom) NOT LIKE 'ST_MultiLineString' THEN
-        temp_point := ST_PointOnSurface(line_geom);
-        gh := ST_GeoHash(temp_point::geography, geohash_precision); -- Cast to geography
-        IF gh IS NOT NULL THEN geohash_set := array_append(geohash_set, gh); END IF;
-        RETURN ARRAY(SELECT DISTINCT unnest(geohash_set));
+        point := ST_PointOnSurface(line_geom);
+        gh := ST_GeoHash(point::geography, geohash_precision);
+        geohash_set := array_cat(geohash_set, public.generate_geohash_prefixes(gh));
+        RETURN ARRAY(SELECT DISTINCT unnest(geohash_set) ORDER BY 1);
     END IF;
 
     -- Proceed for LineString/MultiLineString
 
     -- 1. Centroid/Point on Surface
-    temp_point := ST_PointOnSurface(line_geom);
-    gh := ST_GeoHash(temp_point::geography, geohash_precision); -- Cast to geography
-    IF gh IS NOT NULL THEN geohash_set := array_append(geohash_set, gh); END IF;
+    point := ST_PointOnSurface(line_geom);
+    gh := ST_GeoHash(point::geography, geohash_precision);
+    geohash_set := array_cat(geohash_set, public.generate_geohash_prefixes(gh));
 
     -- 2. Bounding box corners + center
     bbox := ST_Envelope(line_geom);
     bbox_center := ST_Centroid(bbox);
-    gh := ST_GeoHash(bbox_center::geography, geohash_precision); -- Cast centroid to geography
-    IF gh IS NOT NULL THEN geohash_set := array_append(geohash_set, gh); END IF;
+    gh := ST_GeoHash(bbox_center::geography, geohash_precision);
+    geohash_set := array_cat(geohash_set, public.generate_geohash_prefixes(gh));
 
-    -- Create corner points as geometry, then cast to geography for ST_GeoHash
     gh := ST_GeoHash(ST_SetSRID(ST_Point(ST_XMin(bbox), ST_YMin(bbox)), geom_srid)::geography, geohash_precision);
-     IF gh IS NOT NULL THEN geohash_set := array_append(geohash_set, gh); END IF;
+    geohash_set := array_cat(geohash_set, public.generate_geohash_prefixes(gh));
     gh := ST_GeoHash(ST_SetSRID(ST_Point(ST_XMax(bbox), ST_YMax(bbox)), geom_srid)::geography, geohash_precision);
-     IF gh IS NOT NULL THEN geohash_set := array_append(geohash_set, gh); END IF;
+    geohash_set := array_cat(geohash_set, public.generate_geohash_prefixes(gh));
     gh := ST_GeoHash(ST_SetSRID(ST_Point(ST_XMin(bbox), ST_YMax(bbox)), geom_srid)::geography, geohash_precision);
-     IF gh IS NOT NULL THEN geohash_set := array_append(geohash_set, gh); END IF;
+    geohash_set := array_cat(geohash_set, public.generate_geohash_prefixes(gh));
     gh := ST_GeoHash(ST_SetSRID(ST_Point(ST_XMax(bbox), ST_YMin(bbox)), geom_srid)::geography, geohash_precision);
-     IF gh IS NOT NULL THEN geohash_set := array_append(geohash_set, gh); END IF;
+    geohash_set := array_cat(geohash_set, public.generate_geohash_prefixes(gh));
 
     -- 3. Segmentize the line
     BEGIN
-        FOR temp_point IN EXECUTE format('SELECT (ST_DumpPoints(ST_Segmentize(%L::geometry, %s))).geom', line_geom, segment_length)
+        FOR point IN EXECUTE format('SELECT (ST_DumpPoints(ST_Segmentize(%L::geometry, %s))).geom', line_geom, segment_length)
         LOOP
-            gh := ST_GeoHash(temp_point::geography, geohash_precision); -- Cast segment point to geography
-            IF gh IS NOT NULL THEN
-                geohash_set := array_append(geohash_set, gh);
-            END IF;
+            gh := ST_GeoHash(point::geography, geohash_precision);
+            geohash_set := array_cat(geohash_set, public.generate_geohash_prefixes(gh));
         END LOOP;
     EXCEPTION WHEN OTHERS THEN
        RAISE WARNING '[calculate_intersecting_geohashes] ST_Segmentize failed for geometry %: %', ST_AsText(line_geom), SQLERRM;
     END;
 
+    -- Return unique geohashes (including all prefixes)
     RETURN ARRAY(SELECT DISTINCT unnest(geohash_set) ORDER BY 1);
 END;
 $$;
-
 
 -- -------------------------------------
 -- ---------- BINNING TABLE ------------

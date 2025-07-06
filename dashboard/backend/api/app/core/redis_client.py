@@ -88,8 +88,8 @@ async def pubsub_listener():
         return  # Should not happen if called after connect_redis
 
     pubsub = redis_pubsub_client.pubsub()
-    await pubsub.subscribe(settings.REDIS_UPDATES_CHANNEL)
-    log.info(f"Subscribed to Redis channel: {settings.REDIS_UPDATES_CHANNEL}")
+    await pubsub.subscribe(settings.REDIS_UPDATES_CHANNEL, "raw-messages")
+    log.info(f"Subscribed to Redis channels: {settings.REDIS_UPDATES_CHANNEL}, raw-messages")
 
     while True:
         try:
@@ -99,27 +99,27 @@ async def pubsub_listener():
             if message and message["type"] == "message":
                 log.info(f"Received message from Redis: {message['data']}")  # Debug
                 try:
-                    data = json.loads(message["data"])
-                    geohash_str = data.get("geohash_str")
-                    if geohash_str:
-                        # Prepare payload for clients
-                        payload = {
-                            "type": "newPosition",  # Define event types clearly
-                            "data": {
-                                "payload_id": data.get("payload_id"),
-                                "telemetry_id": data.get("telemetry_id"),
-                                "lat": data.get("lat"),
-                                "lon": data.get("lon"),
-                                "ts": data.get("ts"),
-                            },
-                        }
-                        log.info(f"Broadcasting to room {geohash_str}: {payload}")
-                        # Broadcast using the connection manager
-                        await manager.broadcast_to_room(
-                            geohash_str, json.dumps(payload)
-                        )
-                    else:
-                        log.warning("Warning: Redis message missing geohash_str")
+                    channel = message["channel"]
+
+                    if channel == settings.REDIS_UPDATES_CHANNEL:
+                        data = json.loads(message["data"])
+                        geohash_str = data.get("geohash_str")
+                        if geohash_str:
+                            # Prepare payload for clients
+                            payload = {
+                                "type": "newPosition",  # Define event types clearly
+                                "data": data,
+                            }
+                            log.info(f"Broadcasting to room {geohash_str}: {payload}")
+                            # Broadcast using the connection manager
+                            await manager.broadcast_to_room(
+                                geohash_str, json.dumps(payload)
+                            )
+                        else:
+                            log.warning("Warning: Redis message missing geohash_str")
+                    elif channel == "raw-messages":
+                        # Broadcast raw messages to all connected clients
+                        await manager.broadcast_raw_msg(message["data"])
                 except json.JSONDecodeError:
                     log.error(f"Error decoding JSON from Redis message: {message['data']}")
                 except Exception as e:

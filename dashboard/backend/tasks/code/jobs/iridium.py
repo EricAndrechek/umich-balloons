@@ -10,7 +10,7 @@ from pydantic import ValidationError
 from ..models.raw_messages import RawMessage, IridiumMessage
 from ..models.packet import ParsedPacket, process_json_msg
 
-from ..jobs.broadcast import publish_telemetry
+from ..jobs.broadcast import publish_telemetry, publish_raw_message
 
 import time
 import json
@@ -47,6 +47,14 @@ def process_iridium(self, raw_data_item):
     # no matter what, the 'payload' field should be uploaded to the database raw messages table
     # note: this automatically handles transmit_time from iridium
     raw_msg_id = db.upload_raw_message(raw_message, ingest_method='HTTP', transmit_method='Iridium')
+    if isinstance(raw_message.payload, (dict, list)):
+        payload_str = json.dumps(raw_message.payload)
+    elif not isinstance(raw_message.payload, (str, bytes)):
+        logger.error(f"Invalid payload type: {type(raw_message.payload)}")
+        # raise ValueError("Payload must be a string, bytes, dict, or list.")
+    else:
+        payload_str = raw_message.payload if isinstance(raw_message.payload, str) else raw_message.payload.decode('utf-8', errors='backslashreplace')
+    publish_raw_message.delay(payload_str)
 
     # try to parse the Iridium payload
     try:
@@ -129,13 +137,11 @@ def process_iridium(self, raw_data_item):
         raise e
 
     if was_inserted:
-        update_packet = {
-            'telemetry_id': str(telemetry_id),
-            'payload_id': str(payload_id),
-            'lon': parsed_payload.longitude,
-            'lat': parsed_payload.latitude,
-            'ts': parsed_payload.data_time.isoformat(),
-        }
+        update_packet = parsed_payload.dict()
+        update_packet['telemetry_id'] = str(telemetry_id)
+        update_packet['payload_id'] = str(payload_id)
+        update_packet['data_time'] = parsed_payload.data_time.isoformat() if parsed_payload.data_time else None
+
         publish_telemetry.delay(update_packet)
         logger.info(f"New telemetry inserted with ID: {telemetry_id}")
 

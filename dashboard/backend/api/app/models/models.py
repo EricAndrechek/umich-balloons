@@ -151,6 +151,12 @@ class InitialDataRequest(BaseModel):
         description="How far back to fetch historical data, in seconds.",
     )
 
+class NameAndSymbolRequest(BaseModel):
+    payload_id: str | int | uuid.UUID = Field(
+        ...,
+        description="The ID of the payload to fetch name and symbol for.",
+    )
+
 class UpdateViewportRequest(BaseModel):
     geohashes: List[str] = Field(
         ...,

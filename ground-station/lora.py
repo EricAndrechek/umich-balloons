@@ -194,6 +194,7 @@ def main():
         except Exception as e:
             # Catch-all for unexpected issues in the outer loop logic (e.g., config errors)
             logger.error(f"Critical error in outer loop: {e}. Restarting loop after delay...")
+            logger.error(sys.exc_info())
             time.sleep(RETRY_DELAY_SERIAL) # Wait before restarting the whole process
 
     # --- Cleanup ---

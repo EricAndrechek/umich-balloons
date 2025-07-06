@@ -130,6 +130,37 @@ async def handle_update_viewport(
 
     await manager.send_personal_message(response.model_dump_json(), websocket)
 
+async def handle_get_balloon_details(
+    websocket: WebSocket, payload: dict, request_id: Optional[str]
+):
+    """Handles the 'getBalloonDetails' message."""
+    response = models.WebSocketResponse(type="error", request_id=request_id)
+    try:
+        request_model = models.NameAndSymbolRequest(**payload)
+        # message will have a payloadId,
+        # we should return the balloon name and symbol
+
+        response.type = "balloonDetailsResponse"
+
+        name_symbol_data = await database.get_name_and_symbol(str(request_model.payload_id))
+        if not name_symbol_data:
+            response.type = "error"
+            response.error = f"Payload ID {request_model.payload_id} not found."
+
+        else:
+            name_symbol_data["payload_id"] = str(request_model.payload_id)
+            response.data = name_symbol_data
+
+    except Exception as e:
+        log.error(
+            f"Error processing updateViewport for {websocket.client.host}: {e}",
+            exc_info=True,
+        )
+        response.type = "error"
+        response.error = f"Failed to get payload: {getattr(e, 'detail', str(e))}"
+
+    await manager.send_personal_message(response.model_dump_json(), websocket)
+
 
 async def handle_get_telemetry(
     websocket: WebSocket, payload: dict, request_id: Optional[str]
@@ -176,6 +207,89 @@ async def websocket_endpoint(websocket: WebSocket):
                         response.model_dump_json(), websocket
                     )
                     pass  # Keep commented out if telemetry not needed
+                elif msg_type == "getBalloonDetails":
+                    await handle_get_balloon_details(websocket, payload, request_id)
+                elif msg_type == "startRaw":
+                    # Handle startRaw message
+                    log.info(
+                        f"WebSocket {websocket.client.host} requested startRaw."
+                    )
+                    # Optionally send a response back
+                    response = models.WebSocketResponse(
+                        type="rawStarted",
+                        request_id=request_id,
+                        data="Raw data streaming started.",
+                    )
+                    await manager.add_to_raw(
+                        websocket
+                    )
+                elif msg_type == "stopRaw":
+                    # Handle stopRaw message
+                    log.info(
+                        f"WebSocket {websocket.client.host} requested stopRaw."
+                    )
+                    # Optionally send a response back
+                    response = models.WebSocketResponse(
+                        type="rawStopped",
+                        request_id=request_id,
+                        data="Raw data streaming stopped.",
+                    )
+                    await manager.remove_from_raw(
+                        websocket
+                    )
+                elif msg_type == "wsStats":
+                    # Handle wsStats message
+                    log.info(
+                        f"WebSocket {websocket.client.host} requested server stats."
+                    )
+                    # Optionally send a response back
+                    response = models.WebSocketResponse(
+                        type="wsStats",
+                        request_id=request_id,
+                        data={
+                            "active_connections": len(manager.active_connections),
+                            "rooms": list(manager.room_connections.keys()),
+                        },
+                    )
+                    await manager.send_personal_message(
+                        response.model_dump_json(), websocket
+                    )
+                elif msg_type == "ping":
+                    # Handle ping message
+                    log.info(
+                        f"WebSocket {websocket.client.host} sent ping."
+                    )
+                    # Optionally send a response back
+                    response = models.WebSocketResponse(
+                        type="pong",
+                        request_id=request_id,
+                        data="pong",
+                    )
+                    await manager.send_personal_message(
+                        response.model_dump_json(), websocket
+                    )
+                elif msg_type == "getTelem":
+                    # get payload
+                    payload_id = payload.get("payload_id")
+                    if not payload_id:
+                        raise ValueError("Payload ID is required for getTelem.")
+                    # Call the telemetry function
+                    telemetry_data = await database.get_telemetry(payload_id)
+                    if telemetry_data:
+                        response = models.WebSocketResponse(
+                            type="telemetryData",
+                            request_id=request_id,
+                            data=telemetry_data,
+                        )
+                    else:
+                        response = models.WebSocketResponse(
+                            type="error",
+                            request_id=request_id,
+                            error=f"No telemetry data found for payload ID {payload_id}.",
+                        )
+                    await manager.send_personal_message(
+                        response.model_dump_json(), websocket
+                    )
                 else:
                     # Handle unknown type
                     log.warning(

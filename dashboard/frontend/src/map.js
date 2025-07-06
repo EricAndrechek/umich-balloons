@@ -15,8 +15,11 @@ import geohash from "ngeohash";
 import { state } from "./state.js";
 import * as config from "./config.js";
 import * as ui from "./ui.js";
-import { sendMessage, requestDetailsIfNeeded } from "./websocket.js"; // Import specifically needed function
-import { requestInitialData } from "./websocket.js"; // Import specifically needed function
+import {
+    sendMessage,
+    requestDetailsIfNeeded,
+    requestInitialData,
+} from "./websocket.js"; // Import specifically needed function
 
 // --- Reusable Popup Instance ---
 // Create in module scope to be accessible by exported functions
@@ -48,6 +51,47 @@ export function updateMapSource(sourceId, data) {
             );
         }
     }
+
+    // output current map layers for debugging
+    const layers = state.map.getStyle().layers;
+    if (layers) {
+        console.debug(
+            "Current map layers:",
+            layers.map((layer) => layer.id)
+        );
+    } else {
+        console.warn("No layers found in current map style.");
+    }
+    // output current map sources for debugging
+    const sources = state.map.getStyle().sources;
+    if (sources) {
+        console.debug("Current map sources:", Object.keys(sources));
+    } else {
+        console.warn("No sources found in current map style.");
+    }
+    // output current map features for debugging
+    const features = state.map.querySourceFeatures(sourceId);
+    if (features && features.length > 0) {
+        console.debug(
+            `Current features in source '${sourceId}':`,
+            features.map((f) => f.properties)
+        );
+    } else {
+        console.warn(`No features found in source '${sourceId}'.`);
+    }
+
+    // get mapLatestPointData
+    const latestPointSource = state.map.getSource("map-latest-points");
+    if (latestPointSource && latestPointSource.type === "geojson") {
+        const latestPointData = latestPointSource._data;
+        console.debug(
+            "Current mapLatestPointData:",
+            latestPointData.features.map((f) => f.properties)
+        );
+    } else {
+        console.warn("No features found in source 'map-latest-points'.");
+    }
+    console.log(state.mapLatestPointData);
 }
 
 // Debounced function to send viewport updates via WebSocket
@@ -108,9 +152,9 @@ export function updatePopupContent(payloadId, data) {
 
     if (data.error) {
         content += `<p class="text-red-600">Error: ${data.error}</p>`;
-    } else if (data.balloon_name || data.telemetry) { // Check if we got *any* useful data
-        if(data.balloon_name) {
-             content += `<p class="mb-1"><strong>Name:</strong> ${data.balloon_name}</p>`;
+    } else if (data.name || data.telemetry) { // Check if we got *any* useful data
+        if(data.name) {
+             content += `<p class="mb-1"><strong>Name:</strong> ${data.name}</p>`;
         }
         if(data.telemetry && Object.keys(data.telemetry).length > 0) {
             content += '<h4 class="text-md font-semibold mt-2 mb-1">Latest Telemetry:</h4>';
@@ -186,7 +230,7 @@ export function initializeMap() {
             new AttributionControl({
                 compact: true,
                 customAttribution:
-                    "Umich-Balloons | <a href='https://github.com/EricAndrechek' target='_blank'>Eric Andrechek</a>",
+                    "Umich-Balloons | By <a href='https://github.com/EricAndrechek' target='_blank'>Eric</a>",
             }),
             "bottom-right"
         );
@@ -198,8 +242,6 @@ export function initializeMap() {
             }),
             "top-right"
         );
-        // Add Terrain control conditionally if source exists in style
-        // state.map.addControl(new TerrainControl({ source: "terrain" })); // Uncomment if 'terrain' source is defined
 
         // --- Map Event Listeners ---
         state.map.on("load", () => {
@@ -228,12 +270,38 @@ export function initializeMap() {
                     "line-color": ["get", "color"], // Use color property from features
                 },
             });
+
+            state.map.addLayer(
+                {
+                    id: "map-cep-circles-layer",
+                    type: "circle",
+                    source: "map-latest-points", // Use the same source as the main dots
+                    paint: {
+                        // --- Use 'map' alignment to specify radius in meters ---
+                        "circle-pitch-alignment": "map",
+                        "circle-radius": [
+                            // Get the 'cep' property, default to 0 if missing/null
+                            "coalesce",
+                            ["get", "cep"],
+                            0,
+                        ],
+                        // --- Styling ---
+                        "circle-color": "#007cbf", // Example: MapLibre blue
+                        "circle-opacity": 0.15, // Low opacity
+                        "circle-stroke-width": 0.5, // Optional faint stroke
+                        "circle-stroke-color": "#007cbf",
+                        "circle-stroke-opacity": 0.3,
+                    },
+                }
+            ); // Add this layer *before* the main points layer if possible
+
+
             state.map.addLayer({
                 id: "map-latest-points-layer",
                 type: "circle",
                 source: "map-latest-points",
                 paint: {
-                    "circle-radius": 6,
+                    "circle-radius": 7,
                     "circle-color": ["get", "color"], // Use color property from features
                     "circle-opacity": 1.0,
                     "circle-stroke-width": 1.5,
@@ -308,24 +376,34 @@ export function initializeMap() {
                 if (state.payloadDetailsCache.has(payloadId)) {
                     console.log(`Using cached details for popup: ${payloadId}`);
                     const cachedData = state.payloadDetailsCache.get(payloadId);
-                    popup.setLngLat(coordinates)
-                        // Immediately update with cached data
-                        updatePopupContent(payloadId, cachedData); // Call update function directly
+                    popup.setLngLat(coordinates);
+                    // Immediately update with cached data
+                    updatePopupContent(payloadId, cachedData); // Call update function directly
                     if (!popup.isOpen()) popup.addTo(state.map); // Add to map if not already open
                 }
                 // --- Fallback: Fetch if not cached (or pending) ---
                 // Check pending set too - might be loading the first time.
                 else if (state.pendingDetailRequests.has(payloadId)) {
-                     console.log(`Details pending for ${payloadId}, showing loading...`);
-                     popup.setLngLat(coordinates)
-                         .setHTML(`<div class="p-1"><h3>Loading details for ${payloadId}...</h3></div>`)
-                         .addTo(state.map);
+                    console.log(
+                        `Details pending for ${payloadId}, showing loading...`
+                    );
+                    popup
+                        .setLngLat(coordinates)
+                        .setHTML(
+                            `<div class="p-1"><h3>Loading details for ${payloadId}...</h3></div>`
+                        )
+                        .addTo(state.map);
                 } else {
                     // Not cached, not pending -> Should not happen if pre-fetch works, but request as fallback
-                    console.warn(`Details for ${payloadId} not cached or pending. Requesting on click...`);
-                    popup.setLngLat(coordinates)
-                         .setHTML(`<div class="p-1"><h3>Loading details for ${payloadId}...</h3></div>`)
-                         .addTo(state.map);
+                    console.warn(
+                        `Details for ${payloadId} not cached or pending. Requesting on click...`
+                    );
+                    popup
+                        .setLngLat(coordinates)
+                        .setHTML(
+                            `<div class="p-1"><h3>Loading details for ${payloadId}...</h3></div>`
+                        )
+                        .addTo(state.map);
                     // Trigger the fetch (again)
                     requestDetailsIfNeeded(payloadId); // Use the helper to avoid duplicates
                 }

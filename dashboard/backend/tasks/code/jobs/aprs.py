@@ -9,7 +9,7 @@ from ..helpers import db
 from pydantic import ValidationError
 from ..models.raw_messages import RawMessage
 from ..models.packet import ParsedPacket, process_json_msg
-from ..jobs.broadcast import publish_telemetry
+from ..jobs.broadcast import publish_telemetry, publish_raw_message
 
 import time
 import json
@@ -46,6 +46,14 @@ def process_aprs(self, raw_data_item):
     
     # Now we have a RawMessage object and can process the payload according to APRS
     raw_msg_id = db.upload_raw_message(raw_message, transmit_method='APRS')
+    if isinstance(raw_message.payload, (dict, list)):
+        payload_str = json.dumps(raw_message.payload)
+    elif not isinstance(raw_message.payload, (str, bytes)):
+        logger.error(f"Invalid payload type: {type(raw_message.payload)}")
+        # raise ValueError("Payload must be a string, bytes, dict, or list.")
+    else:
+        payload_str = raw_message.payload if isinstance(raw_message.payload, str) else raw_message.payload.decode('utf-8', errors='backslashreplace')
+    publish_raw_message.delay(payload_str)
 
     parsed_aprs = {}
 
@@ -99,13 +107,12 @@ def process_aprs(self, raw_data_item):
 
     if was_inserted:
         logger.info(f"New telemetry inserted with ID: {telemetry_id}")
-        update_packet = {
-            'telemetry_id': str(telemetry_id),
-            'payload_id': str(payload_id),
-            'lon': parsed_payload.longitude,
-            'lat': parsed_payload.latitude,
-            'ts': parsed_payload.data_time.isoformat(),
-        }
+        # send parsed packet with telemetry ID and payload ID to the publish_telemetry task
+        update_packet = parsed_payload.dict()
+        update_packet['telemetry_id'] = str(telemetry_id)
+        update_packet['payload_id'] = str(payload_id)
+        update_packet['data_time'] = parsed_payload.data_time.isoformat() if parsed_payload.data_time else None
+
         publish_telemetry.delay(update_packet)
     else:
         logger.info(f"Telemetry already exists with ID: {telemetry_id}")

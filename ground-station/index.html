@@ -4,224 +4,725 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=2.0, user-scalable=no">
-    <title>Ground Station Log Viewer</title>
+    <title>Pi Dashboard</title>
     <style>
-        /* --- Base Styles (keep from previous version) --- */
+        :root {
+            /* High Contrast Dark Theme */
+            --bg-color: #1a1a1a;
+            --text-color: #e0e0e0;
+            --text-muted-color: #a0a0a0;
+            --panel-bg-color: #2c2c2c;
+            --border-color: #4f5254;
+            --accent-color: #5cb85c;
+            /* Brighter Green accent */
+            --warn-color: #f0ad4e;
+            /* Amber/Orange */
+            --error-color: #d9534f;
+            /* Red */
+            --info-color: #5bc0de;
+            /* Cyan/Blue */
+            --debug-color: #b0b0b0;
+            /* Lighter Grey */
+    
+            /* --- INCREASED SIZES --- */
+            --font-size-base: 18px;
+            /* Base size for readability on 7" */
+            --font-size-small: 0.9em;
+            --font-size-medium: 1em;
+            --font-size-large: 1.2em;
+            --font-size-xl: 1.4em;
+            --font-size-xxl: 2em;
+            --line-height-base: 1.6;
+            --padding-base: 10px;
+            --padding-large: 15px;
+            --button-padding-y: 10px;
+            /* Vertical padding for buttons */
+            --button-padding-x: 16px;
+            /* Horizontal padding for buttons */
+            --control-height: 40px;
+            /* Target height for buttons/selects */
+            /* --- END INCREASED SIZES --- */
+    
+            --font-mono: 'SF Mono', Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+        }
+    
+        html {
+            height: 100%;
+        }
+    
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
             margin: 0;
             padding: 0;
-            background-color: #2b2b2b;
-            color: #e0e0e0;
-            font-size: 14px;
-            line-height: 1.5;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            font-size: var(--font-size-base);
+            line-height: var(--line-height-base);
             display: flex;
             flex-direction: column;
-            height: 100vh;
+            height: 100%;
             overflow: hidden;
+            /* Prevent accidental text selection on touch */
+            user-select: none;
+            -webkit-user-select: none;
+            -moz-user-select: none;
+            -ms-user-select: none;
         }
-
-        #header {
-            background-color: #3c3f41;
-            color: #d0d0d0;
-            padding: 8px 10px;
-            text-align: center;
-            flex-shrink: 0;
-            border-bottom: 1px solid #4f5254;
-        }
-
-        #header h1 {
-            margin: 0;
-            font-size: 1.1em;
-            font-weight: 500;
-        }
-
-        #logContainer {
-            flex-grow: 1;
-            overflow-y: scroll;
-            background-color: #2b2b2b;
-            padding: 5px;
-            font-family: 'SF Mono', Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
-            font-size: 0.85em;
-            -webkit-overflow-scrolling: touch;
-        }
-
-        .log-line {
-            margin-bottom: 2px;
-            padding: 1px 3px;
-            white-space: pre-wrap;
-            word-wrap: break-word;
-            border-radius: 2px;
-        }
-
-        .log-line.hidden {
-            display: none;
-        }
-
-        /* <-- Class to hide filtered logs */
-
-        /* --- Log Line Styling (keep from previous version) --- */
-        .log-line.direwolf {
-            color: #87ceeb;
-        }
-
-        .log-line.serial-reader {
-            color: #90ee90;
-        }
-
-        .log-line.direwolf-listener {
-            color: #ffa07a;
-        }
-
-        .log-line.log-viewer {
-            color: #d3d3d3;
-        }
-
-        .log-line.unknown,
-        .log-line.json-error {
-            color: #f08080;
-        }
-
-        .log-line .timestamp {
-            color: #a9a9a9;
-            margin-right: 8px;
-        }
-
-        .log-line .hostname {
-            color: #bdb76b;
-            margin-right: 8px;
-        }
-
-        .log-line .unit {
-            font-weight: bold;
-            margin-right: 8px;
-        }
-
-        .log-line.level-error {
-            color: #ff6b6b;
-            font-weight: bold;
-        }
-
-        .log-line.level-warning {
-            color: #ffcc66;
-        }
-
-        #status {
-            padding: 5px 10px;
-            text-align: center;
-            font-style: italic;
-            color: #999;
-            flex-shrink: 0;
-            height: 1.5em;
-            line-height: 1.5em;
-        }
-
-        .status-error {
-            color: #ff6b6b !important;
-            font-weight: bold;
-        }
-
-        .status-ok {
-            color: #90ee90 !important;
-        }
-
-        body.scrolling * {
-            pointer-events: none;
-        }
-
-        /* --- NEW: Control Styles --- */
-        #controls {
-            padding: 6px 10px;
+    
+        /* --- Tabs --- */
+        #tabs {
+            display: flex;
             background-color: #313335;
             flex-shrink: 0;
-            border-bottom: 1px solid #4f5254;
+            border-bottom: 1px solid var(--border-color);
         }
-
-        .control-group {
+    
+        .tab-button {
+            padding: var(--padding-base) var(--padding-large);
+            /* Increased padding */
+            border: none;
+            background: none;
+            color: var(--text-muted-color);
+            cursor: pointer;
+            font-size: var(--font-size-medium);
+            /* Larger tab text */
+            font-weight: 500;
+            flex-grow: 1;
+            text-align: center;
+            border-bottom: 4px solid transparent;
+            /* Thicker indicator */
+            transition: background-color 0.2s, color 0.2s, border-color 0.2s;
+            line-height: 1.4;
+            /* Adjust line height if text wraps */
+            min-height: var(--control-height);
+            box-sizing: border-box;
+        }
+    
+        .tab-button:hover {
+            background-color: #454749;
+        }
+    
+        .tab-button.active {
+            color: var(--text-color);
+            font-weight: 600;
+            border-bottom-color: var(--accent-color);
+        }
+    
+        /* Refresh Button specific size */
+        #refreshButton {
+            flex-grow: 0;
+            /* Don't let it grow */
+            padding: var(--padding-base) var(--padding-large);
+            font-size: var(--font-size-large);
+            /* Make icon bigger */
+            background-color: #4f5254;
+            color: var(--text-color);
+            border: none;
+            border-left: 1px solid var(--border-color);
+            /* Separator */
+            cursor: pointer;
+        }
+    
+        #refreshButton:hover {
+            background-color: #6b6b6b;
+        }
+    
+        /* --- Main Content Area --- */
+        #mainContent {
+            flex-grow: 1;
+            overflow-y: auto;
+            -webkit-overflow-scrolling: touch;
+            position: relative;
+        }
+    
+        .tab-content {
+            display: none;
+            padding: var(--padding-large);
+            /* More padding around content */
+            height: 100%;
+            box-sizing: border-box;
+            overflow-y: auto;
+            -webkit-overflow-scrolling: touch;
+        }
+    
+        .tab-content.active {
+            display: block;
+        }
+    
+        h2 {
+            font-size: var(--font-size-large);
+            margin-top: 0;
+            margin-bottom: var(--padding-large);
+        }
+    
+        p {
+            margin-bottom: var(--padding-large);
+        }
+    
+        /* --- Log Viewer Specific Styles --- */
+        #logControls {
+            padding: var(--padding-base);
+            background-color: #313335;
+            border-bottom: 1px solid var(--border-color);
+            margin: calc(-1 * var(--padding-large)) calc(-1 * var(--padding-large)) var(--padding-large) calc(-1 * var(--padding-large));
+            /* Adjust negative margin */
             display: flex;
-            /* Use flexbox for alignment */
             flex-wrap: wrap;
-            /* Allow wrapping on small screens */
+            gap: var(--padding-base);
             align-items: center;
-            margin-bottom: 5px;
-            gap: 10px;
-            /* Spacing between items */
+            justify-content: center;
         }
-
-        .control-group:last-child {
-            margin-bottom: 0;
-        }
-
-        .control-group label {
+    
+        #logControls label,
+        #logControls .checkbox-label {
             margin-right: 5px;
             font-weight: 500;
             color: #bbb;
+            font-size: var(--font-size-medium);
+            vertical-align: middle;
+            cursor: pointer;
         }
-
-        .control-group select,
-        .control-group button {
-            padding: 4px 8px;
-            font-size: 0.9em;
+    
+        #logControls select,
+        #logControls button {
+            padding: var(--button-padding-y) var(--button-padding-x);
+            font-size: var(--font-size-medium);
             background-color: #4f5254;
             color: #e0e0e0;
             border: 1px solid #6b6b6b;
             border-radius: 4px;
             cursor: pointer;
+            min-height: var(--control-height);
+            box-sizing: border-box;
+            vertical-align: middle;
         }
-
-        .control-group input[type="checkbox"] {
-            margin-right: 3px;
+    
+        #logControls input[type="checkbox"] {
+            margin-right: 5px;
             cursor: pointer;
             vertical-align: middle;
-            /* Align checkbox with label text */
+            transform: scale(1.4);
+            /* Make checkbox bigger */
         }
-
-        .control-group .checkbox-label {
-            /* Label next to checkbox */
+    
+        #logContainer {
+            font-family: var(--font-mono);
+            font-size: var(--font-size-medium);
+            /* Larger log font */
+            line-height: 1.7;
+            /* More spacing */
+            /* max-height calculation might need adjustment depending on final header/controls height */
+            max-height: calc(100vh - 250px);
+            /* Estimate, adjust as needed */
+            overflow-y: auto;
+        }
+    
+        .log-line {
+            margin-bottom: 3px;
+            padding: 2px 4px;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            border-radius: 2px;
+        }
+    
+        .log-line.hidden {
+            display: none;
+        }
+    
+        /* Log colors remain the same */
+        .log-line.direwolf {
+            color: var(--info-color);
+        }
+    
+        .log-line.serial-reader {
+            color: #90ee90;
+        }
+    
+        .log-line.direwolf-listener {
+            color: #ffa07a;
+        }
+    
+        .log-line.log-viewer {
+            color: var(--debug-color);
+        }
+    
+        .log-line.unknown,
+        .log-line.json-error {
+            color: #f08080;
+        }
+    
+        .log-line .timestamp {
+            color: var(--text-muted-color);
             margin-right: 10px;
-            /* Space between checkbox items */
-            cursor: pointer;
-            vertical-align: middle;
         }
-
-        .control-group button:active {
+    
+        .log-line .hostname {
+            color: #bdb76b;
+            margin-right: 10px;
+        }
+    
+        .log-line .unit {
+            font-weight: bold;
+            margin-right: 10px;
+        }
+    
+        .log-line.level-error {
+            color: var(--error-color);
+            font-weight: bold;
+        }
+    
+        .log-line.level-warning {
+            color: var(--warn-color);
+        }
+    
+        /* --- Stats & Network View Styles --- */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: var(--padding-large);
+        }
+    
+        .stat-card {
+            background-color: var(--panel-bg-color);
+            padding: var(--padding-large);
+            border-radius: 5px;
+            border: 1px solid var(--border-color);
+        }
+    
+        .stat-card h3 {
+            margin-top: 0;
+            margin-bottom: var(--padding-base);
+            font-size: var(--font-size-medium);
+            color: var(--text-muted-color);
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 8px;
+        }
+    
+        .stat-card .value {
+            font-size: var(--font-size-xxl);
+            font-weight: 600;
+            color: var(--text-color);
+        }
+    
+        /* Much bigger value */
+        .stat-card .unit {
+            font-size: var(--font-size-small);
+            margin-left: 5px;
+            color: var(--text-muted-color);
+        }
+    
+        .progress-bar {
+            background-color: #4f5254;
+            border-radius: 8px;
+            overflow: hidden;
+            height: 16px;
+            margin-top: 10px;
+        }
+    
+        /* Taller progress bar */
+        .progress-bar-inner {
+            background-color: var(--accent-color);
+            height: 100%;
+            width: 0%;
+            transition: width 0.5s ease-out;
+        }
+    
+        .stat-card .details {
+            font-size: var(--font-size-small);
+            color: var(--text-muted-color);
+            margin-top: 8px;
+        }
+    
+        .network-icon {
+            font-size: var(--font-size-xl);
+            margin-right: 10px;
+            vertical-align: middle;
+            width: 1.5em;
+            display: inline-block;
+            text-align: center;
+        }
+    
+        .wifi-bars {
+            display: inline-block;
+            height: 20px;
+            position: relative;
+            width: 30px;
+            vertical-align: middle;
+            margin-left: 8px;
+        }
+    
+        /* Bigger bars */
+        .wifi-bars span {
+            background-color: var(--text-muted-color);
+            bottom: 0;
+            position: absolute;
+            width: 5px;
+            border-radius: 2px;
+        }
+    
+        /* Wider bars */
+        .wifi-bars span:nth-child(1) {
+            left: 0;
+            height: 5px;
+        }
+    
+        /* Scale heights */
+        .wifi-bars span:nth-child(2) {
+            left: 8px;
+            height: 10px;
+        }
+    
+        /* Adjust spacing */
+        .wifi-bars span:nth-child(3) {
+            left: 16px;
+            height: 15px;
+        }
+    
+        .wifi-bars span:nth-child(4) {
+            left: 24px;
+            height: 20px;
+        }
+    
+        .wifi-bars.signal-0 span {
+            background-color: #4f5254;
+        }
+    
+        .wifi-bars.signal-1 span:nth-child(1) {
+            background-color: var(--accent-color);
+        }
+    
+        .wifi-bars.signal-2 span:nth-child(1),
+        .wifi-bars.signal-2 span:nth-child(2) {
+            background-color: var(--accent-color);
+        }
+    
+        .wifi-bars.signal-3 span:nth-child(1),
+        .wifi-bars.signal-3 span:nth-child(2),
+        .wifi-bars.signal-3 span:nth-child(3) {
+            background-color: var(--accent-color);
+        }
+    
+        .wifi-bars.signal-4 span {
+            background-color: var(--accent-color);
+        }
+    
+        .ethernet-icon::before {
+            content: "↔";
+            font-weight: bold;
+        }
+    
+        .wifi-icon::before {
+            content: "📶";
+        }
+    
+        /* Standard emoji works well */
+        .disconnected {
+            color: var(--error-color);
+            opacity: 0.7;
+        }
+    
+        #networkStatus div {
+            margin-bottom: 8px;
+            font-size: var(--font-size-medium);
+        }
+    
+        /* Space out network lines */
+    
+        /* --- Crash Log View --- */
+        #crashLogContainer {
+            font-family: var(--font-mono);
+            font-size: var(--font-size-small);
+            background-color: var(--panel-bg-color);
+            border: 1px solid var(--border-color);
+            padding: var(--padding-base);
+            max-height: 65vh;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            margin-top: var(--padding-base);
+        }
+    
+        #crashLogControls {
+            margin-bottom: var(--padding-base);
+            display: flex;
+            flex-wrap: wrap;
+            gap: var(--padding-base);
+            align-items: center;
+        }
+    
+        #crashLogControls label {
+            font-size: var(--font-size-medium);
+        }
+    
+        #crashLogControls select,
+        #crashLogControls button {
+            padding: var(--button-padding-y) var(--button-padding-x);
+            font-size: var(--font-size-medium);
+            background-color: #4f5254;
+            color: #e0e0e0;
+            border: 1px solid #6b6b6b;
+            border-radius: 4px;
+            min-height: var(--control-height);
+            box-sizing: border-box;
+        }
+    
+        #crashLogStatus {
+            margin-top: var(--padding-base);
+            font-style: italic;
+            font-size: var(--font-size-small);
+        }
+    
+        /* --- Admin View --- */
+        #rebootButton {
+            background-color: var(--error-color);
+            color: white;
+            font-weight: bold;
+            padding: var(--padding-large) 25px;
+            /* Extra large reboot button */
+            font-size: var(--font-size-large);
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            min-height: calc(var(--control-height) * 1.2);
+        }
+    
+        #rebootButton:hover {
+            background-color: #c9302c;
+        }
+    
+        /* Darker red on hover */
+        #rebootStatus {
+            margin-top: var(--padding-base);
+            font-style: italic;
+            font-size: var(--font-size-medium);
+        }
+    
+        /* --- Service Status Styles --- */
+        #services .service-list {
+            list-style: none;
+            padding: 0;
+        }
+    
+        #services .service-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background-color: var(--panel-bg-color);
+            padding: var(--padding-base) var(--padding-large);
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            margin-bottom: 10px;
+            flex-wrap: wrap;
+            gap: var(--padding-base);
+        }
+    
+        #services .service-name {
+            font-weight: 600;
+            font-size: var(--font-size-medium);
+            margin-right: var(--padding-base);
+        }
+    
+        #services .service-status {
+            padding: 5px 10px;
+            border-radius: 15px;
+            font-size: var(--font-size-small);
+            font-weight: 600;
+            text-transform: uppercase;
+            white-space: nowrap;
+            margin-right: 15px;
+        }
+    
+        #services .status-active {
+            background-color: var(--accent-color);
+            color: #fff;
+        }
+    
+        #services .status-inactive {
+            background-color: #6c757d;
+            color: #fff;
+        }
+    
+        #services .status-failed {
+            background-color: var(--error-color);
+            color: #fff;
+        }
+    
+        #services .status-activating,
+        #services .status-reloading,
+        #services .status-deactivating {
+            background-color: var(--warn-color);
+            color: #333;
+        }
+    
+        #services .status-not-found,
+        #services .status-error {
+            background-color: #f8f9fa;
+            color: #dc3545;
+            border: 1px solid #dc3545;
+        }
+    
+        #services .restart-button {
+            padding: var(--button-padding-y) var(--button-padding-x);
+            font-size: var(--font-size-medium);
+            background-color: #4f5254;
+            color: #e0e0e0;
+            border: 1px solid #6b6b6b;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-left: auto;
+            min-height: var(--control-height);
+            box-sizing: border-box;
+        }
+    
+        #services .restart-button:hover {
             background-color: #6b6b6b;
+        }
+    
+        #services .restart-button:disabled {
+            background-color: #313335;
+            color: #6c757d;
+            cursor: not-allowed;
+        }
+    
+        #services .restart-status {
+            font-size: var(--font-size-small);
+            font-style: italic;
+            color: var(--text-muted-color);
+            margin-left: 10px;
+        }
+    
+        /* --- Global Status --- */
+        #status {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            padding: 8px var(--padding-base);
+            text-align: center;
+            font-style: italic;
+            color: #999;
+            background-color: rgba(30, 30, 30, 0.95);
+            /* Darker, more opaque */
+            font-size: var(--font-size-medium);
+            /* Larger status */
+            z-index: 10;
+            border-top: 1px solid var(--border-color);
+            min-height: calc(var(--control-height) * 0.8);
+            /* Ensure decent height */
+            line-height: calc(var(--control-height) * 0.8);
+        }
+    
+        .status-error {
+            color: var(--error-color) !important;
+            font-weight: bold;
+        }
+    
+        .status-ok {
+            color: var(--accent-color) !important;
+        }
+    
+        /* Prevent text selection when scrolling */
+        body.scrolling * {
+            pointer-events: none;
         }
     </style>
 </head>
 
 <body>
-    <div id="header">
-        <h1>RPi Live Logs</h1>
+    <div id="tabs">
+         <div id="tabs">
+     <button class="tab-button active" onclick="openTab('logs')">Live Logs</button>
+     <button class="tab-button" onclick="openTab('stats')">System</button>
+     <button class="tab-button" onclick="openTab('services')">Services</button>
+     <button class="tab-button" onclick="openTab('crash')">Crash Logs</button>
+     <button class="tab-button" onclick="openTab('admin')">Admin</button>
+     <button id="refreshButton" title="Refresh Page">🔄</button>
+ </div>
     </div>
 
-    <div id="controls">
-        <div class="control-group">
-            <label>Services:</label>
-            <span id="serviceFilters">
-            </span>
+    <div id="mainContent">
+        <div id="logs" class="tab-content active">
+            <div id="logControls">
+                <label>Svc:</label><span id="serviceFilters"></span>
+                <label for="levelFilter">Min:</label><select id="levelFilter"></select>
+                <button id="pauseBtn">Pause</button>
+                <button id="clearBtn">Clear</button>
+                <button id="bottomBtn">Bottom</button>
+            </div>
+            <div id="logContainer"></div>
         </div>
-        <div class="control-group">
-            <label for="levelFilter">Min Level:</label>
-            <select id="levelFilter">
-                <option value="7">Debug</option>
-                <option value="6" selected>Info</option>
-                <option value="5">Notice</option>
-                <option value="4">Warning</option>
-                <option value="3">Error</option>
-                <option value="0">Critical/Alert/Emergency</option>
-            </select>
-            <button id="pauseBtn">Pause</button>
-            <button id="clearBtn">Clear</button>
-            <button id="bottomBtn">Bottom</button>
+
+        <div id="stats" class="tab-content">
+            <h2>System Status</h2>
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <h3>CPU Usage</h3>
+                    <div id="cpuUsageValue" class="value">-- %</div>
+                    <div class="progress-bar">
+                        <div id="cpuProgressBar" class="progress-bar-inner"></div>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <h3>Memory (RAM)</h3>
+                    <div id="ramUsageValue" class="value">-- %</div>
+                    <div class="progress-bar">
+                        <div id="ramProgressBar" class="progress-bar-inner"></div>
+                    </div>
+                    <div id="ramUsageDetail" class="details">-- / -- GB</div>
+                </div>
+                <div class="stat-card">
+                    <h3>CPU Temperature</h3>
+                    <div id="cpuTempValue" class="value">-- °C</div>
+                </div>
+                <div class="stat-card">
+                    <h3>Network</h3>
+                    <div id="networkStatus">Loading...</div>
+                </div>
+            </div>
+        </div>
+
+         <div id="services" class="tab-content">
+            <h2>Service Management</h2>
+            <p>Status updates automatically. Use restart buttons with caution.</p>
+            <ul id="serviceList" class="service-list">
+                </ul>
+        </div>
+
+        <div id="crash" class="tab-content">
+            <h2>Previous Boot Logs</h2>
+            <div id="crashLogControls">
+                <label for="bootSelect">Select Boot:</label>
+                <select id="bootSelect">
+                    <option value="-1">Last Boot</option>
+                    <option value="-2">Previous Boot (-2)</option>
+                    <option value="-3">Previous Boot (-3)</option>
+                    <option value="-4">Previous Boot (-4)</option>
+                </select>
+                <label for="crashLines">Lines:</label>
+                <select id="crashLines">
+                    <option value="100">100</option>
+                    <option value="250" selected>250</option>
+                    <option value="500">500</option>
+                    <option value="1000">1000</option>
+                </select>
+                <button id="fetchCrashLogBtn">Fetch Logs</button>
+            </div>
+            <div id="crashLogContainer">Select boot offset and press "Fetch Logs".</div>
+            <div id="crashLogStatus" style="margin-top: 5px; font-style: italic;"></div>
+        </div>
+
+        <div id="admin" class="tab-content">
+            <h2>Admin Actions</h2>
+            <p>Use with caution!</p>
+            <button id="rebootButton">Reboot Raspberry Pi</button>
+            <div id="rebootStatus"></div>
         </div>
     </div>
 
-    <div id="logContainer">
-    </div>
     <div id="status">Connecting...</div>
 
     <script>
+        // --- Globals & DOM Refs ---
         const logContainer = document.getElementById('logContainer');
         const statusDiv = document.getElementById('status');
         const pauseBtn = document.getElementById('pauseBtn');
@@ -229,270 +730,519 @@
         const bottomBtn = document.getElementById('bottomBtn');
         const levelFilterSelect = document.getElementById('levelFilter');
         const serviceFiltersContainer = document.getElementById('serviceFilters');
+        // Stats elements
+        const cpuUsageValue = document.getElementById('cpuUsageValue');
+        const cpuProgressBar = document.getElementById('cpuProgressBar');
+        const ramUsageValue = document.getElementById('ramUsageValue');
+        const ramProgressBar = document.getElementById('ramProgressBar');
+        const ramUsageDetail = document.getElementById('ramUsageDetail');
+        const cpuTempValue = document.getElementById('cpuTempValue');
+        const networkStatusDiv = document.getElementById('networkStatus');
+        // Crash log elements
+        const bootSelect = document.getElementById('bootSelect');
+        const crashLines = document.getElementById('crashLines');
+        const fetchCrashLogBtn = document.getElementById('fetchCrashLogBtn');
+        const crashLogContainer = document.getElementById('crashLogContainer');
+        const crashLogStatus = document.getElementById('crashLogStatus');
+        // Admin elements
+        const rebootButton = document.getElementById('rebootButton');
+        const rebootStatus = document.getElementById('rebootStatus');
+        // Tabs
+        const tabButtons = document.querySelectorAll('.tab-button');
+        const tabContents = document.querySelectorAll('.tab-content');
 
         const maxLogLines = 300;
-        let ws;
+        let logWebSocket;
+        let systemWebSocket;
         let paused = false;
         let autoScroll = true;
         let scrollTimeout;
-
-        // --- Filter State ---
-        // Define the services you expect to see logs from
         const knownServices = ['direwolf', 'lora', 'aprs', 'log-viewer']; // Add others if needed
-        let activeServices = new Set(knownServices); // Initially all are active
-        let minLogLevel = parseInt(levelFilterSelect.value); // Initial level from dropdown
+        let activeServices = new Set(knownServices);
+        let minLogLevel = 6; // Default to Info
 
-        // --- Populate Service Filters ---
-        function populateServiceFilters() {
-            serviceFiltersContainer.innerHTML = ''; // Clear existing
-            knownServices.forEach(serviceName => {
-                const label = document.createElement('label');
-                label.className = 'checkbox-label';
-
-                const checkbox = document.createElement('input');
-                checkbox.type = 'checkbox';
-                checkbox.name = 'service';
-                checkbox.value = serviceName;
-                checkbox.checked = activeServices.has(serviceName); // Set initial state
-                checkbox.onchange = handleFilterChange; // Add event listener
-
-                label.appendChild(checkbox);
-                label.appendChild(document.createTextNode(` ${serviceName.replace(/-/g, ' ')}`)); // Prettify name
-                serviceFiltersContainer.appendChild(label);
-            });
+        // --- Tab Handling ---
+        function openTab(tabName) {
+            tabContents.forEach(content => content.classList.remove('active'));
+            tabButtons.forEach(button => button.classList.remove('active'));
+            document.getElementById(tabName).classList.add('active');
+            document.querySelector(`.tab-button[onclick="openTab('${tabName}')"]`).classList.add('active');
+            // Special actions when opening tabs
+            if (tabName === 'crash') {
+                // Maybe auto-fetch last boot log on first open?
+                // Or just wait for button press
+            }
         }
 
-        // --- WebSocket Connection (same as before) ---
-        function connectWebSocket() {
-            // ... (Keep the WebSocket connection logic exactly the same as the previous version) ...
+        // --- WebSocket Connections ---
+        function connectLogWebSocket() {
             const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
             const wsUrl = `${wsProtocol}//${window.location.host}/ws_logs`;
-            console.log(`Connecting to WebSocket: ${wsUrl}`);
-            statusDiv.textContent = 'Connecting...';
-            statusDiv.className = 'status'; // Reset class
+            console.log(`Connecting to Log WS: ${wsUrl}`);
+            setGlobalStatus('Connecting Logs...', false);
 
-            ws = new WebSocket(wsUrl);
+            logWebSocket = new WebSocket(wsUrl);
 
-            ws.onopen = () => {
-                console.log('WebSocket Connected');
-                statusDiv.textContent = 'Connected';
-                statusDiv.className = 'status status-ok';
-                setTimeout(() => { statusDiv.textContent = ''; }, 2000); // Hide status after 2s
+            logWebSocket.onopen = () => { console.log('Log WS Connected'); checkConnections(); };
+            logWebSocket.onerror = (err) => { console.error('Log WS Error:', err); setGlobalStatus('Log WS Error!', true); };
+            logWebSocket.onclose = (evt) => {
+                console.log('Log WS Closed:', evt.code);
+                setGlobalStatus('Log WS Closed. Retrying...', true);
+                logWebSocket = null; // Mark as closed
+                setTimeout(connectLogWebSocket, 5000);
             };
-
-            ws.onmessage = (event) => {
-                // Don't process if paused
+            logWebSocket.onmessage = (event) => {
                 if (paused) return;
-
                 try {
                     const logData = JSON.parse(event.data);
-                    // Check filters *before* appending
-                    if (shouldDisplayLog(logData)) {
-                        appendLogLine(logData);
-                    }
+                    if (shouldDisplayLog(logData)) appendLogLine(logData);
                 } catch (e) {
-                    console.error('Failed to parse log data:', event.data, e);
-                    const rawData = { MESSAGE: `RAW: ${event.data}`, _SYSTEMD_UNIT: 'json-error', PRIORITY: '3' }; // Treat parse errors as high priority
-                    if (shouldDisplayLog(rawData)) {
-                        appendLogLine(rawData);
-                    }
+                    console.error('Log Parse Error:', event.data, e);
+                    const rawData = { MESSAGE: `RAW: ${event.data}`, _SYSTEMD_UNIT: 'json-error', PRIORITY: '3' };
+                    if (shouldDisplayLog(rawData)) appendLogLine(rawData);
                 }
-            };
-
-            ws.onerror = (error) => {
-                console.error('WebSocket Error:', error);
-                statusDiv.textContent = 'WebSocket Error!';
-                statusDiv.className = 'status status-error';
-            };
-
-            ws.onclose = (event) => {
-                console.log('WebSocket Closed:', event.code, event.reason);
-                statusDiv.textContent = `Disconnected (Code: ${event.code}). Retrying...`;
-                statusDiv.className = 'status status-error';
-                setTimeout(connectWebSocket, 5000);
             };
         }
 
-        // --- Filtering Logic ---
-        function getLogMetadata(logData) {
-            let serviceName = 'unknown';
-            if (logData._SYSTEMD_UNIT) {
-                serviceName = logData._SYSTEMD_UNIT.replace(/\.service$/, '');
-            } else if (logData.source) { // Fallback
-                serviceName = logData.source;
+        function connectSystemWebSocket() {
+            const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${wsProtocol}//${window.location.host}/ws_system`;
+            console.log(`Connecting to System WS: ${wsUrl}`);
+            setGlobalStatus('Connecting System Stats...', false);
+
+            systemWebSocket = new WebSocket(wsUrl);
+
+            systemWebSocket.onopen = () => { console.log('System WS Connected'); checkConnections(); };
+            systemWebSocket.onerror = (err) => { console.error('System WS Error:', err); setGlobalStatus('System WS Error!', true); };
+            systemWebSocket.onclose = (evt) => {
+                console.log('System WS Closed:', evt.code);
+                setGlobalStatus('System WS Closed. Retrying...', true);
+                systemWebSocket = null; // Mark as closed
+                // Clear stats display on disconnect
+                updateStatsDisplay(null);
+                updateNetworkDisplay(null);
+                setTimeout(connectSystemWebSocket, 5000);
+            };
+            systemWebSocket.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    // Check payload type
+                    if (data.type === 'stats_and_status') {
+                        updateStatsDisplay(data); // Update CPU, RAM, Temp
+                        updateNetworkDisplay(data.network); // Update Network
+                        updateServiceStatusDisplay(data.services); // NEW: Update Services
+                    } else if (data.type === 'stats') { // Handle old format if needed
+                        updateStatsDisplay(data);
+                        updateNetworkDisplay(data.network);
+                    }
+                } catch (e) {
+                    console.error('System WS Parse Error:', event.data, e);
+                }
+            };
+        }
+
+        function checkConnections() {
+            const logConnected = logWebSocket && logWebSocket.readyState === WebSocket.OPEN;
+            const sysConnected = systemWebSocket && systemWebSocket.readyState === WebSocket.OPEN;
+            if (logConnected && sysConnected) {
+                setGlobalStatus('Connected', false, true); // isOK = true
+            } else if (!logConnected && !sysConnected) {
+                // Status set by onclose/onerror
+            } else {
+                setGlobalStatus(`Connected (${logConnected ? 'Logs' : ''}${sysConnected ? ' System' : ''}). Waiting...`, false);
             }
-            // Journald PRIORITY: 0-2 (err/crit), 3 (err), 4 (warn), 5 (notice), 6 (info), 7 (debug)
-            const priority = parseInt(logData.PRIORITY || '6'); // Default to info if missing
+        }
 
-            // Add service to known list if it's new (optional, could repopulate checkboxes)
-            // if (!knownServices.includes(serviceName) && serviceName !== 'unknown' && serviceName !== 'json-error') {
-            //    knownServices.push(serviceName);
-            //    populateServiceFilters(); // Update UI
-            // }
+        function setGlobalStatus(message, isError = false, isOK = false) {
+            statusDiv.textContent = message;
+            statusDiv.className = 'status'; // Reset
+            if (isError) statusDiv.classList.add('status-error');
+            if (isOK) {
+                statusDiv.classList.add('status-ok');
+                // Optionally hide status after a delay if it's just "Connected"
+                setTimeout(() => { if (statusDiv.textContent === 'Connected') statusDiv.textContent = ''; }, 3000);
+            }
+        }
 
+        // --- Stats & Network Display ---
+        function updateStatsDisplay(stats) {
+            if (!stats) { // Handle disconnect case
+                cpuUsageValue.textContent = '-- %'; cpuProgressBar.style.width = '0%';
+                ramUsageValue.textContent = '-- %'; ramProgressBar.style.width = '0%';
+                ramUsageDetail.textContent = '-- / -- GB';
+                cpuTempValue.textContent = '-- °C';
+                return;
+            }
+            cpuUsageValue.textContent = `${stats.cpu_percent?.toFixed(1) ?? '--'} %`;
+            cpuProgressBar.style.width = `${stats.cpu_percent ?? 0}%`;
+            ramUsageValue.textContent = `${stats.ram_percent?.toFixed(1) ?? '--'} %`;
+            ramProgressBar.style.width = `${stats.ram_percent ?? 0}%`;
+            ramUsageDetail.textContent = `${stats.ram_used_gb?.toFixed(1) ?? '--'} / ${stats.ram_total_gb?.toFixed(1) ?? '--'} GB`;
+            cpuTempValue.textContent = `${stats.cpu_temp_c?.toFixed(1) ?? '--'} °C`;
+        }
+
+        function updateNetworkDisplay(network) {
+            if (!network) { networkStatusDiv.innerHTML = '<i>No data</i>'; return; }
+
+            let html = '';
+            const eth = network.ethernet;
+            const wifi = network.wifi;
+
+            if (eth) {
+                html += `<div><span class="network-icon ethernet-icon"></span> <strong>Ethernet (${eth.interface}):</strong> ${eth.ip || 'No IP'}</div>`;
+            } else {
+                html += `<div><span class="network-icon ethernet-icon disconnected"></span> Ethernet: Disconnected</div>`;
+            }
+
+            if (wifi) {
+                let signalBars = 0;
+                if (typeof wifi.signal === 'number') {
+                    if (wifi.signal > 75) signalBars = 4;
+                    else if (wifi.signal > 50) signalBars = 3;
+                    else if (wifi.signal > 25) signalBars = 2;
+                    else if (wifi.signal > 5) signalBars = 1;
+                }
+                const signalText = (typeof wifi.signal === 'number') ? `${wifi.signal}%` : (wifi.quality || 'N/A');
+
+                html += `<div><span class="network-icon wifi-icon"></span> <strong>WiFi (${wifi.interface}):</strong> ${wifi.ip || 'No IP'} <span class="wifi-bars signal-${signalBars}"><span></span><span></span><span></span><span></span></span> (${signalText})</div>`;
+            } else {
+                html += `<div><span class="network-icon wifi-icon disconnected"></span> WiFi: Disconnected</div>`;
+            }
+            networkStatusDiv.innerHTML = html;
+        }
+
+        // --- Log Filtering/Display (mostly same as before) ---
+        function populateServiceFilters() {
+            serviceFiltersContainer.innerHTML = '';
+            knownServices.forEach(serviceName => {
+                const label = document.createElement('label'); label.className = 'checkbox-label';
+                const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.name = 'service';
+                checkbox.value = serviceName; checkbox.checked = activeServices.has(serviceName); checkbox.onchange = handleFilterChange;
+                label.appendChild(checkbox); label.appendChild(document.createTextNode(` ${serviceName.replace(/-/g, ' ')}`));
+                serviceFiltersContainer.appendChild(label);
+            });
+            // Add Level options
+            levelFilterSelect.innerHTML = `
+                <option value="7">Debug</option><option value="6">Info</option><option value="5">Notice</option>
+                <option value="4">Warning</option><option value="3">Error</option><option value="0">Critical+</option>`;
+            levelFilterSelect.value = minLogLevel; // Set initial value
+        }
+
+        function getLogMetadata(logData) { /* ... same as before ... */
+            let serviceName = 'unknown';
+            if (logData._SYSTEMD_UNIT) serviceName = logData._SYSTEMD_UNIT.replace(/\.service$/, '');
+            else if (logData.source) serviceName = logData.source;
+            const priority = parseInt(logData.PRIORITY || '6');
             return { serviceName, priority };
         }
 
-        function shouldDisplayLog(logData) {
+        function shouldDisplayLog(logData) { /* ... same as before ... */
             const { serviceName, priority } = getLogMetadata(logData);
-
-            // Check service filter
             if (!activeServices.has(serviceName) && serviceName !== 'json-error' && serviceName !== 'unknown') {
-                // Always show unknown/error logs unless explicitly filtered out later? For now, filter them too.
-                // Could add separate checkboxes for 'unknown' or 'json-error' if desired.
-                if (!activeServices.has('unknown')) return false; // Allow filtering unknowns if needed
+                if (!activeServices.has('unknown')) return false;
             }
-
-            // Check level filter (lower priority number means higher severity)
-            if (priority > minLogLevel) {
-                return false;
-            }
-
-            return true; // Passes both filters
+            if (priority > minLogLevel) return false;
+            return true;
         }
 
-        // --- Log Display ---
-        function appendLogLine(logData) {
+        function appendLogLine(logData) { /* ... mostly same as before, ensure it uses getLogMetadata ... */
             const { serviceName, priority } = getLogMetadata(logData);
-
             const lineElement = document.createElement('div');
-            lineElement.classList.add('log-line');
-            lineElement.classList.add(serviceName); // Add service name class for styling
+            lineElement.classList.add('log-line', serviceName);
+            lineElement.dataset.service = serviceName; lineElement.dataset.level = priority;
+            if (!shouldDisplayLog(logData)) lineElement.classList.add('hidden'); // Hide initially if filters don't match
 
-            // Store metadata on the element for potential re-filtering
-            lineElement.dataset.service = serviceName;
-            lineElement.dataset.level = priority;
-
-            // --- (Keep the rest of the DOM element creation logic from the previous version) ---
-            // Extract key info from journald JSON format
             const timestampMs = parseInt(logData.__REALTIME_TIMESTAMP || logData._SOURCE_REALTIME_TIMESTAMP || '0') / 1000;
             const timestampStr = timestampMs ? new Date(timestampMs).toLocaleTimeString() : '?:??:??';
             const hostname = logData.HOSTNAME || logData._HOSTNAME || '';
             const message = logData.MESSAGE || JSON.stringify(logData);
+            if (priority <= 3) lineElement.classList.add('level-error'); else if (priority === 4) lineElement.classList.add('level-warning');
 
-            // Add level classes for highlighting
-            if (priority <= 3) lineElement.classList.add('level-error');
-            else if (priority === 4) lineElement.classList.add('level-warning');
-            // ... other levels if needed ...
+            const timeSpan = document.createElement('span'); timeSpan.className = 'timestamp'; timeSpan.textContent = `[${timestampStr}]`;
+            const hostSpan = document.createElement('span'); hostSpan.className = 'hostname'; hostSpan.textContent = hostname ? `[${hostname}]` : '';
+            const unitSpan = document.createElement('span'); unitSpan.className = 'unit'; unitSpan.textContent = `[${serviceName}]`;
+            const msgSpan = document.createElement('span'); msgSpan.className = 'message'; msgSpan.textContent = message;
 
-            // Construct the line content
-            const timeSpan = document.createElement('span');
-            timeSpan.className = 'timestamp'; timeSpan.textContent = `[${timestampStr}]`;
-            const hostSpan = document.createElement('span');
-            hostSpan.className = 'hostname'; hostSpan.textContent = hostname ? `[${hostname}]` : '';
-            const unitSpan = document.createElement('span');
-            unitSpan.className = 'unit'; unitSpan.textContent = `[${serviceName}]`;
-            const msgSpan = document.createElement('span');
-            msgSpan.className = 'message'; msgSpan.textContent = message;
-
-            lineElement.appendChild(timeSpan); lineElement.appendChild(hostSpan);
-            lineElement.appendChild(unitSpan); lineElement.appendChild(msgSpan);
-            // --- (End of kept DOM element creation logic) ---
-
+            lineElement.appendChild(timeSpan); lineElement.appendChild(hostSpan); lineElement.appendChild(unitSpan); lineElement.appendChild(msgSpan);
             logContainer.appendChild(lineElement);
 
-            // Prune old log lines (only prune visible ones? or all?)
-            // Pruning all is simpler, might prune hidden ones faster.
-            while (logContainer.children.length > maxLogLines) {
-                logContainer.removeChild(logContainer.firstChild);
-            }
-
-            // Scroll to bottom if autoScroll is enabled
-            if (autoScroll) {
-                scrollToBottom();
-            }
+            while (logContainer.children.length > maxLogLines) logContainer.removeChild(logContainer.firstChild);
+            if (autoScroll) scrollToBottom();
         }
 
-        function scrollToBottom() {
-            logContainer.scrollTop = logContainer.scrollHeight;
-        }
+        function scrollToBottom() { logContainer.scrollTop = logContainer.scrollHeight; }
 
-        // --- Filter Handling ---
-        function handleFilterChange() {
-            // Update active service list
+        function handleFilterChange() { /* ... same as before ... */
             activeServices.clear();
             const checkedBoxes = serviceFiltersContainer.querySelectorAll('input[name="service"]:checked');
             checkedBoxes.forEach(box => activeServices.add(box.value));
-
-            // Update min log level
             minLogLevel = parseInt(levelFilterSelect.value);
-
             console.log("Filters updated:", { services: Array.from(activeServices), level: minLogLevel });
             applyFiltersToExisting();
         }
 
-        function applyFiltersToExisting() {
+        function applyFiltersToExisting() { /* ... same as before ... */
             const allLines = logContainer.querySelectorAll('.log-line');
-            console.log(`Applying filters to ${allLines.length} existing lines...`);
             let visibleCount = 0;
             allLines.forEach(line => {
-                const service = line.dataset.service || 'unknown';
-                const level = parseInt(line.dataset.level || '6');
-
-                // Check service filter
-                const serviceMatch = activeServices.has(service) || service === 'json-error' || service === 'unknown'; // Maybe always show errors?
-                // Check level filter
+                const service = line.dataset.service || 'unknown'; const level = parseInt(line.dataset.level || '6');
+                const serviceMatch = activeServices.has(service) || service === 'json-error' || service === 'unknown';
                 const levelMatch = level <= minLogLevel;
-
-                if (serviceMatch && levelMatch) {
-                    line.classList.remove('hidden');
-                    visibleCount++;
-                } else {
-                    line.classList.add('hidden');
-                }
+                if (serviceMatch && levelMatch) { line.classList.remove('hidden'); visibleCount++; }
+                else { line.classList.add('hidden'); }
             });
             console.log(`${visibleCount} lines visible after filtering.`);
-            // Optionally scroll to bottom after filtering if auto-scroll was on
             if (autoScroll) scrollToBottom();
         }
 
+        // --- Crash Log Fetching ---
+        async function fetchCrashLogs() {
+            const selectedBoot = bootSelect.value;
+            const selectedLines = crashLines.value;
+            crashLogContainer.textContent = 'Fetching logs...';
+            crashLogStatus.textContent = '';
+            fetchCrashLogBtn.disabled = true;
 
-        // --- Controls (Event Listeners) ---
-        pauseBtn.onclick = () => {
-            paused = !paused;
-            pauseBtn.textContent = paused ? 'Resume' : 'Pause';
-            statusDiv.textContent = paused ? 'Paused' : '';
-            statusDiv.className = 'status';
-        };
+            try {
+                const response = await fetch(`/api/crashlogs?boot=${selectedBoot}&lines=${selectedLines}`);
+                const text = await response.text();
+                if (!response.ok) {
+                    console.error("Crash log fetch error:", response.status, text);
+                    crashLogContainer.textContent = `Error ${response.status}: ${text}`;
+                    crashLogStatus.textContent = `Failed to fetch logs.`;
+                    crashLogStatus.style.color = 'var(--error-color)';
+                } else {
+                    crashLogContainer.textContent = text || '(No log output received)';
+                    crashLogStatus.textContent = `Loaded logs for boot ${selectedBoot}.`;
+                    crashLogStatus.style.color = ''; // Reset color
+                }
+            } catch (error) {
+                console.error('Fetch crash logs failed:', error);
+                crashLogContainer.textContent = `Network error or server unavailable: ${error.message}`;
+                crashLogStatus.textContent = 'Failed to fetch logs.';
+                crashLogStatus.style.color = 'var(--error-color)';
+            } finally {
+                fetchCrashLogBtn.disabled = false;
+            }
+        }
 
-        clearBtn.onclick = () => {
-            logContainer.innerHTML = ''; // Clear display
-        };
+        // --- Admin Actions ---
+        async function performReboot() {
+            if (!confirm("Are you absolutely sure you want to reboot the Raspberry Pi?")) {
+                return;
+            }
+            rebootStatus.textContent = 'Issuing reboot command...';
+            rebootButton.disabled = true;
 
-        bottomBtn.onclick = () => {
-            autoScroll = true;
-            scrollToBottom();
-            bottomBtn.style.backgroundColor = '';
-            console.log("Auto-scroll force enabled");
-        };
+            try {
+                const response = await fetch('/api/reboot', { method: 'POST' });
+                const data = await response.json();
+                if (!response.ok) {
+                    throw new Error(data.detail || `HTTP ${response.status}`);
+                }
+                rebootStatus.textContent = `Reboot command sent successfully. System will go down shortly. Message: ${data.message}`;
+                rebootStatus.style.color = 'var(--accent-color)';
+                // The page will become unresponsive soon anyway
+            } catch (error) {
+                console.error('Reboot failed:', error);
+                rebootStatus.textContent = `Error issuing reboot: ${error.message}`;
+                rebootStatus.style.color = 'var(--error-color)';
+                rebootButton.disabled = false; // Re-enable if failed
+            }
+        }
 
-        // Add listener for log level dropdown
-        levelFilterSelect.onchange = handleFilterChange;
-
-        // Detect scroll to manage auto-scroll (same as before)
-        logContainer.onscroll = () => {
-            // ... (Keep the onscroll logic exactly the same as the previous version) ...
-            const isAtBottom = logContainer.scrollHeight - logContainer.scrollTop - logContainer.clientHeight < 5;
-            if (!isAtBottom && autoScroll) {
-                autoScroll = false;
-                bottomBtn.style.backgroundColor = '#ffcc66'; // Indicate auto-scroll off
-                console.log("Auto-scroll disabled");
-            } else if (isAtBottom && !autoScroll) {
-                autoScroll = true;
-                bottomBtn.style.backgroundColor = ''; // Reset style
-                console.log("Auto-scroll enabled");
+        function updateServiceStatusDisplay(services) {
+            if (!services) {
+                // Clear the list or show a message if no service data is available
+                serviceList.innerHTML = '<li style="color: var(--text-muted-color);">Waiting for service status data...</li>';
+                return;
             }
 
-            document.body.classList.add('scrolling');
-            clearTimeout(scrollTimeout);
-            scrollTimeout = setTimeout(() => {
-                document.body.classList.remove('scrolling');
-            }, 150);
+            // Keep track of service names present in the current update
+            const currentServiceNames = new Set(Object.keys(services));
+
+            // Update existing items or create new ones
+            Object.entries(services).forEach(([serviceName, status]) => {
+                let item = serviceList.querySelector(`.service-item[data-service-name="${serviceName}"]`);
+
+                if (!item) {
+                    // --- Create New Item ---
+                    item = document.createElement('li');
+                    item.className = 'service-item';
+                    item.dataset.serviceName = serviceName; // Store the name for lookup
+
+                    // span to hold status and name in
+                    const statusNameSpan = document.createElement('span');
+                    statusNameSpan.className = 'status-name-spanner';
+
+                    // 1. Status Span
+                    const statusSpan = document.createElement('span');
+                    statusSpan.className = `service-status status-${status}`; // Set initial class
+                    statusSpan.textContent = status.toUpperCase();
+                    statusNameSpan.appendChild(statusSpan);
+
+                    // 2. Service Name Span
+                    const nameSpan = document.createElement('span');
+                    nameSpan.className = 'service-name';
+                    nameSpan.textContent = serviceName;
+                    statusNameSpan.appendChild(nameSpan);
+
+                    // append the status/name span to the item
+                    item.appendChild(statusNameSpan);
+
+                    // 3. Controls Wrapper Span (for button and its status)
+                    const controlsSpan = document.createElement('span');
+
+                    // 4. Restart Button
+                    const button = document.createElement('button');
+                    button.className = 'restart-button';
+                    button.textContent = 'Restart';
+                    // Set onclick programmatically (safer than string attribute)
+                    button.onclick = () => handleRestartClick(serviceName, button);
+                    controlsSpan.appendChild(button);
+
+                    // 5. Restart Status Span (initially empty)
+                    const restartStatusSpan = document.createElement('span');
+                    restartStatusSpan.className = 'restart-status';
+                    controlsSpan.appendChild(restartStatusSpan);
+
+                    item.appendChild(controlsSpan); // Add controls wrapper to the list item
+                    serviceList.appendChild(item); // Add the new item to the list
+
+                } else {
+                    // --- Update Existing Item ---
+                    // Update Status Span
+                    const statusSpan = item.querySelector('.service-status');
+                    if (statusSpan) {
+                        // Only update if status actually changed? Optional optimization.
+                        // if (statusSpan.textContent.toLowerCase() !== status) {
+                        statusSpan.textContent = status.toUpperCase();
+                        statusSpan.className = `service-status status-${status}`; // Reset class list
+                        // }
+                    }
+                    // Optionally clear the restart status message when the main status updates
+                    const restartStatusSpan = item.querySelector('.restart-status');
+                    if (restartStatusSpan && restartStatusSpan.textContent.startsWith('Error')) {
+                        // Don't clear errors immediately, let user see them
+                    } else if (restartStatusSpan) {
+                        restartStatusSpan.textContent = ''; // Clear "OK" or "Restarting..."
+                    }
+                    // Ensure button is enabled if it was disabled previously (unless restart is ongoing)
+                    const button = item.querySelector('.restart-button');
+                    if (button && button.disabled && (!restartStatusSpan || restartStatusSpan.textContent !== 'Restarting...')) {
+                        // button.disabled = false; // Re-enable button? Or let handleRestartClick manage this state? Let handleRestartClick manage.
+                    }
+                }
+            });
+
+            // Remove items for services that are no longer in the 'services' object
+            const allItems = serviceList.querySelectorAll('.service-item');
+            allItems.forEach(item => {
+                const serviceName = item.dataset.serviceName;
+                if (!currentServiceNames.has(serviceName)) {
+                    console.log(`Removing stale service item: ${serviceName}`);
+                    item.remove();
+                }
+            });
+
+            // Handle case where the 'services' object itself is empty
+            if (serviceList.children.length === 0 && Object.keys(services).length === 0) {
+                serviceList.innerHTML = '<li style="color: var(--text-muted-color);">No services reported by backend.</li>';
+            } else if (serviceList.children.length > 0 && serviceList.children[0].textContent === 'Waiting for service status data...' || serviceList.children[0].textContent === 'No services reported by backend.') {
+                // Remove the placeholder message if actual services were added
+                if (Object.keys(services).length > 0) {
+                    serviceList.innerHTML = ''; // Clear placeholder
+                    // Re-run the add logic (simpler than trying to re-add selectively) - RECURSION - AVOID
+                    // Instead of recursion, rebuild the list from scratch if placeholder was present?
+                    // Let's refine: Just remove the placeholder if it exists and items were added.
+                    const placeholder = serviceList.querySelector('li[style*="color: var(--text-muted-color);"]');
+                    if (placeholder) placeholder.remove();
+                    // Re-add items (needed because we cleared the list implicitly before)
+                    Object.entries(services).forEach(([serviceName, status]) => {
+                        // Re-run creation logic here if needed because placeholder was removed
+                        // This part indicates the logic flow could be simpler if we build items into a fragment first
+                    });
+                    // Let's stick to the original flow: The update logic should handle adding items even if placeholder was there.
+
+                }
+            }
+        }
+
+        function handleRestartClick(serviceName, buttonElement) {
+            if (!confirm(`Are you sure you want to restart the service: ${serviceName}?`)) {
+                return;
+            }
+            // Disable button and show status immediately
+            buttonElement.disabled = true;
+            const statusElement = buttonElement.nextElementSibling; // Get the sibling span for status
+            if(statusElement) statusElement.textContent = 'Restarting...';
+
+            restartService(serviceName, buttonElement, statusElement);
+        }
+
+        async function restartService(serviceName, buttonElement, statusElement) {
+            console.log(`Attempting to restart service: ${serviceName}`);
+            try {
+                const response = await fetch(`/api/services/restart/${serviceName}`, { method: 'POST' });
+                const data = await response.json(); // Assuming backend returns JSON
+
+                if (!response.ok) {
+                    throw new Error(data.detail || `HTTP ${response.status}`);
+                }
+
+                console.log(`Restart command acknowledged for ${serviceName}:`, data.message);
+                if (statusElement) {
+                    statusElement.textContent = 'OK';
+                    statusElement.style.color = 'var(--accent-color)';
+                }
+                // Status should update automatically via WebSocket soon, but clear message after delay
+                setTimeout(() => {
+                    if (statusElement && statusElement.textContent === 'OK') statusElement.textContent = '';
+                    buttonElement.disabled = false; // Re-enable after success/timeout
+                }, 5000); // Clear status after 5s
+
+            } catch (error) {
+                console.error(`Failed to restart ${serviceName}:`, error);
+                if (statusElement) {
+                    statusElement.textContent = `Error: ${error.message}`;
+                    statusElement.style.color = 'var(--error-color)';
+                }
+                // Re-enable button immediately on error
+                buttonElement.disabled = false;
+                // Optionally clear error message after longer delay
+                setTimeout(() => {
+                    if (statusElement && statusElement.textContent.startsWith('Error')) statusElement.textContent = '';
+                }, 10000);
+            }
+        }
+
+        refreshButton.onclick = () => {
+            console.log("Manual page refresh requested.");
+            window.location.reload();
+        };
+
+
+        // --- Event Listeners ---
+        tabButtons.forEach(button => button.addEventListener('click', () => openTab(button.getAttribute('onclick').match(/'([^']+)'/)[1])));
+        pauseBtn.onclick = () => { paused = !paused; pauseBtn.textContent = paused ? 'Resume' : 'Pause'; setGlobalStatus(paused ? 'Paused' : ''); };
+        clearBtn.onclick = () => { logContainer.innerHTML = ''; }; // Clear display
+        bottomBtn.onclick = () => { autoScroll = true; scrollToBottom(); bottomBtn.style.backgroundColor = ''; };
+        levelFilterSelect.onchange = handleFilterChange;
+        fetchCrashLogBtn.onclick = fetchCrashLogs;
+        rebootButton.onclick = performReboot;
+        logContainer.onscroll = () => { /* ... same scroll handling as before ... */
+            const isAtBottom = logContainer.scrollHeight - logContainer.scrollTop - logContainer.clientHeight < 5;
+            if (!isAtBottom && autoScroll) { autoScroll = false; bottomBtn.style.backgroundColor = 'var(--warn-color)'; }
+            else if (isAtBottom && !autoScroll) { autoScroll = true; bottomBtn.style.backgroundColor = ''; }
+            document.body.classList.add('scrolling'); clearTimeout(scrollTimeout);
+            scrollTimeout = setTimeout(() => { document.body.classList.remove('scrolling'); }, 150);
         };
 
         // --- Initialisation ---
-        populateServiceFilters(); // Create checkboxes on load
-        connectWebSocket(); // Start connection
+        populateServiceFilters(); // Create checkboxes/level options
+        openTab('logs'); // Start on the logs tab
+        connectLogWebSocket(); // Start connections
+        connectSystemWebSocket();
 
     </script>
 </body>

@@ -89,11 +89,11 @@ document.addEventListener("visibilitychange", () => {
             console.log("Tab visible and connected: Sending viewport update.");
             // Use the debounced function, or call sendMessage directly if immediate update is desired
             debouncedSendViewportUpdate(); // Trigger map viewport update
-            // debouncedSendViewportUpdate.flush(); // If you want to force immediate execution (requires lodash debounce setup)
+            // debouncedSendViewportUpdate.flush(); // If we want to force immediate execution (requires lodash debounce setup)
         }
     } else {
         console.log("Tab became hidden.");
-        // Optional: Consider disconnecting WebSocket cleanly when tab is hidden
+        // Consider disconnecting WebSocket cleanly when tab is hidden
         // if (state.webSocket && state.webSocket.readyState === WebSocket.OPEN) {
         //     console.log("Closing WebSocket connection while tab is hidden.");
         //     state.webSocket.close(1000, "Tab hidden"); // 1000 = Normal Closure
@@ -112,7 +112,7 @@ window.addEventListener("error", (event) => {
         event.colno,
         event.error
     );
-    // You could potentially update the UI status here as well
+    // could potentially update the UI status here as well
     // state.connectionStatus = 'error';
     // ui.updateStatusIndicator();
 });
