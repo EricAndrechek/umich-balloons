@@ -1,4 +1,4 @@
-name = "umich-balloons-relay"
+name = "umich-balloons-api"
 main = "src/index.ts"
 compatibility_date = "2026-04-05"
 
