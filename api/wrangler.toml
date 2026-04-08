@@ -1,0 +1,9 @@
+name = "umich-balloons-relay"
+main = "src/index.ts"
+compatibility_date = "2026-04-05"
+
+[vars]
+SONDEHUB_API_URL = "https://api.v2.sondehub.org"
+SOFTWARE_NAME = "umich-balloons"
+SOFTWARE_VERSION = "2.0.0"
+DEV_MODE = "false"

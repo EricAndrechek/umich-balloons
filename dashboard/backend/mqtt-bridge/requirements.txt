@@ -1,2 +1,0 @@
-paho-mqtt
-redis>=5.0.0

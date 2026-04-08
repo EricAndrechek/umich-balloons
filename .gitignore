@@ -11,6 +11,10 @@
 **/*.log
 **/*.db
 **/.env
+**/.dev.vars
+**/.test_state.json
+
+.wrangler
 
 # kicad
 *.bak
