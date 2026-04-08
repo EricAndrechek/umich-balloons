@@ -1,1 +1,0 @@
-Note: Since Cloudflare Tunnels do not allow MQTT (non-websockets, that is) connections, this bridge is ultimately unused as MQTT is not used. If we switch hosting or decide to host MQTT on a 3rd party service, we can use this bridge to connect to the MQTT broker.

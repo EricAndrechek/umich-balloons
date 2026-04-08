@@ -10,4 +10,5 @@
 **/package-lock.json
 **/*.log
 **/*.db
+**/.test_state.json
 # **/.env
