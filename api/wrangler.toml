@@ -1,6 +1,14 @@
 name = "umich-balloons-api"
 main = "src/index.ts"
 compatibility_date = "2026-04-05"
+workers_dev = false
+
+[[routes]]
+pattern = "api.umich-balloons.com"
+custom_domain = true
+
+[observability]
+enabled = true
 
 [vars]
 SONDEHUB_API_URL = "https://api.v2.sondehub.org"

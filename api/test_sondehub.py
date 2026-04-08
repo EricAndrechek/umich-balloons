@@ -18,7 +18,8 @@ starting from scratch.
 
 Usage:
   uv run test_sondehub.py                           # local wrangler dev server
-  uv run test_sondehub.py --live URL                 # deployed worker
+  uv run test_sondehub.py --live                     # deployed at api.umich-balloons.com
+  uv run test_sondehub.py --live https://custom.url  # deployed at custom URL
   uv run test_sondehub.py --relay http://host:port   # custom URL
   uv run test_sondehub.py --no-aprs-is --fresh
 
@@ -252,16 +253,14 @@ def send_iridium_relay(relay_url: str, imei: str, callsign: str,
 def main():
     parser = argparse.ArgumentParser(description="Test umich-balloons relay + APRS-IS")
     parser.add_argument("--relay", default=None, help="Relay base URL (default: http://localhost:8787)")
-    parser.add_argument("--live", nargs="?", const="NEEDS_URL", default=None,
-                        metavar="URL", help="Use deployed worker URL (required argument)")
+    parser.add_argument("--live", nargs="?", const="https://api.umich-balloons.com", default=None,
+                        metavar="URL", help="Use deployed worker (default: https://api.umich-balloons.com)")
     parser.add_argument("--no-aprs-is", action="store_true", help="Skip APRS-IS injection")
     parser.add_argument("--ticks", type=int, default=NUM_TICKS, help="Number of 60s ticks")
     parser.add_argument("--fresh", action="store_true", help="Ignore saved state, start from scratch")
     args = parser.parse_args()
 
     if args.live is not None:
-        if args.live == "NEEDS_URL":
-            parser.error("--live requires the deployed worker URL, e.g. --live https://relay.example.workers.dev")
         relay_url = args.live.rstrip("/")
     elif args.relay is not None:
         relay_url = args.relay.rstrip("/")
