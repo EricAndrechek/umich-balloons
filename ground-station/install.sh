@@ -252,75 +252,17 @@ if [ "$CURRENT_HOSTNAME" = "raspberrypi" ] || [ "$CURRENT_HOSTNAME" = "localhost
     hostnamectl set-hostname "umb-ground-station"
 fi
 
-# ─── Overlayfs read-only root ─────────────────────────────────────
-log "Configuring overlayfs for read-only root filesystem..."
+# ─── Read-only root (optional, requires separate /data partition) ──
+# Pi OS has built-in overlayfs support. To enable it later on a running Pi:
+#   sudo raspi-config nonint enable_overlayfs
+# This is NOT enabled automatically because it requires a separate /data
+# partition and careful testing. For now, swap is disabled and tmpfs is
+# used for /tmp to reduce SD card writes.
 mkdir -p /data/logs
-
-# Create overlayfs setup script that runs at boot
-cat > /usr/local/bin/umbgs-overlayfs.sh << 'OVERLAYEOF'
-#!/bin/bash
-# Enable overlayfs on root filesystem.
-# /data/ partition stays read-write. Root becomes read-only with
-# an overlay backed by tmpfs so runtime changes are discarded on reboot.
-set -euo pipefail
-
-FSTAB="/etc/fstab"
-
-# Check if already configured
-if grep -q "overlay" "$FSTAB" 2>/dev/null; then
-    exit 0
+mount -t tmpfs -o size=64M,nosuid,nodev tmpfs /tmp 2>/dev/null || true
+if ! grep -q "tmpfs /tmp" /etc/fstab 2>/dev/null; then
+    echo "tmpfs /tmp tmpfs defaults,nosuid,nodev,size=64M 0 0" >> /etc/fstab
 fi
-
-# Ensure /data is a separate entry in fstab (may already be from partition setup)
-if ! grep -q "/data" "$FSTAB"; then
-    # Find root device and add /data bind mount
-    ROOT_DEV=$(findmnt -n -o SOURCE /)
-    echo "${ROOT_DEV} /data ext4 defaults,noatime 0 2" >> "$FSTAB"
-fi
-
-# Make root read-only by adding 'ro' option
-sed -i 's|\(.*\s/\s.*\)defaults\(.*\)|\1defaults,ro\2|' "$FSTAB"
-
-# Create overlay directories
-mkdir -p /data/overlay/upper /data/overlay/work
-
-# Add tmpfs overlays for directories that need runtime writes
-cat >> "$FSTAB" << 'EOF'
-# Overlayfs writable layers for read-only root
-tmpfs /tmp tmpfs defaults,nosuid,nodev,size=64M 0 0
-tmpfs /var/tmp tmpfs defaults,nosuid,nodev,size=32M 0 0
-overlay /etc overlay defaults,lowerdir=/etc,upperdir=/data/overlay/upper/etc,workdir=/data/overlay/work/etc 0 0
-overlay /var/log overlay defaults,lowerdir=/var/log,upperdir=/data/overlay/upper/var-log,workdir=/data/overlay/work/var-log 0 0
-EOF
-
-# Create overlay subdirectories
-mkdir -p /data/overlay/upper/etc /data/overlay/work/etc
-mkdir -p /data/overlay/upper/var-log /data/overlay/work/var-log
-
-# Ensure /data/logs persists (symlink from overlay)
-mkdir -p /data/logs
-
-echo "Overlayfs configured. Reboot required to take effect."
-OVERLAYEOF
-chmod +x /usr/local/bin/umbgs-overlayfs.sh
-
-# Create systemd unit to run overlayfs setup once
-cat > "${SYSTEMD_DIR}/umbgs-overlayfs-setup.service" << 'EOF'
-[Unit]
-Description=UMB Ground Station Overlayfs Setup (one-shot)
-ConditionPathExists=!/data/.overlayfs-configured
-After=local-fs.target
-
-[Service]
-Type=oneshot
-ExecStart=/usr/local/bin/umbgs-overlayfs.sh
-ExecStartPost=/usr/bin/touch /data/.overlayfs-configured
-RemainAfterExit=yes
-
-[Install]
-WantedBy=multi-user.target
-EOF
-systemctl enable umbgs-overlayfs-setup.service
 
 log "=== Installation complete ==="
 log "Next steps:"
