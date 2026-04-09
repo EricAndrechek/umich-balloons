@@ -20,11 +20,12 @@ jobs:
         working-directory: ground-station/umbgs
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: '1.22'
+          cache-dependency-path: ground-station/umbgs/go.sum
 
       - name: Go mod tidy
         run: go mod tidy
@@ -53,7 +54,7 @@ jobs:
           sha256sum umbgs-linux-arm64 > umbgs-linux-arm64.sha256
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: umbgs-linux-arm64
           path: |
@@ -69,7 +70,7 @@ jobs:
 
     steps:
       - name: Download artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v6
         with:
           name: umbgs-linux-arm64
 
@@ -86,10 +87,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Download artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v6
         with:
           name: umbgs-linux-arm64
 
@@ -108,7 +109,7 @@ jobs:
             mkaczanowski/packer-builder-arm:latest \
             build \
             -var "umbgs_version=${VERSION}" \
-            /build/ground-station/packer/ground-station.pkr.json
+            /build/ground-station/packer/ground-station.json
 
       - name: Upload image to release
         uses: softprops/action-gh-release@v2

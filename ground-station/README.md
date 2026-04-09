@@ -77,7 +77,7 @@ docker run --rm --privileged \
   mkaczanowski/packer-builder-arm:latest \
   build \
   -var "umbgs_version=dev" \
-  /build/ground-station/packer/ground-station.pkr.json
+  /build/ground-station/packer/ground-station.json
 
 # Output: ground-station/packer/output/umb-ground-station-<date>.img.gz
 # Flash to SD card:
@@ -200,7 +200,7 @@ ground-station/
 │   ├── umbgs-watchdog.timer
 │   └── direwolf.service
 ├── packer/
-│   └── ground-station.pkr.json  # Packer ARM image config
+│   └── ground-station.json      # Packer ARM image config
 └── umbgs/                   # Go source
     ├── go.mod
     ├── cmd/umbgs/main.go    # Entrypoint + orchestrator
