@@ -62,7 +62,7 @@
         "cp /tmp/watchdog.sh /usr/local/bin/umbgs-watchdog.sh",
         "chmod +x /tmp/install.sh",
         "UMBGS_VERSION={{ user `umbgs_version` }} /tmp/install.sh",
-        "cp /tmp/splash.png /usr/share/plymouth/themes/pix/splash.png",
+        "mkdir -p /usr/share/plymouth/themes/pix && cp /tmp/splash.png /usr/share/plymouth/themes/pix/splash.png",
         "rm /tmp/install.sh /tmp/watchdog.sh /tmp/splash.png"
       ]
     },
