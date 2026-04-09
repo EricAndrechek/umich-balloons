@@ -11,7 +11,7 @@
       "file_checksum_type": "none",
       "file_target_extension": "img.xz",
       "file_unarchive_cmd": ["xz", "-d", "$ARCHIVE_PATH"],
-      "image_build_method": "reuse",
+      "image_build_method": "resize",
       "image_path": "ground-station.img",
       "image_size": "4G",
       "image_type": "dos",
