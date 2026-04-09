@@ -12,6 +12,9 @@
     "test:live": "uv run test_sondehub.py --live",
     "test:fresh": "uv run test_sondehub.py --fresh"
   },
+  "dependencies": {
+    "@msgpack/msgpack": "^3.0.0-beta.3"
+  },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260408.0",
     "typescript": "^5.8.0",

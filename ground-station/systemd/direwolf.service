@@ -1,0 +1,15 @@
+[Unit]
+Description=Direwolf APRS TNC
+After=sound.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/direwolf -t 0
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=direwolf
+
+[Install]
+WantedBy=multi-user.target

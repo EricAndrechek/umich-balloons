@@ -1,0 +1,7 @@
+[Unit]
+Description=UMB Ground Station Watchdog
+After=umbgs.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/umbgs-watchdog.sh

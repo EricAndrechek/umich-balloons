@@ -1,352 +1,250 @@
 # Ground Station
 
-## Building Pi Image
+Single Go binary (`umbgs`) that runs on a Raspberry Pi (4/5, or Le Potato) to receive APRS and LoRa balloon telemetry and upload it to the API. Replaces the previous multi-service Python setup.
 
-## Install SDM
+## What It Does
 
-## Run SDM
+- **APRS**: Connects to Direwolf's KISS TCP port, reads decoded packets
+- **LoRa**: Auto-detects USB serial (Arduino/ESP32), reads JSON telemetry
+- **GPS**: Connects to gpsd, reports ground station position to API (`/station` endpoint) at configurable intervals
+- **Upload**: MessagePack + gzip over QUIC/HTTP/3 (falls back to HTTP/2). Immediate upload per packet — buffers to SQLite only on failure
+- **Dashboard**: Embedded web UI at port 8080 with live stats, packet feed, logs, config editor, and manual update trigger via WebSocket
+- **Update**: A/B binary slots with watchdog rollback — manual trigger only (no auto-polling)
+- **Network**: Syncs WiFi from config via NetworkManager, creates AP hotspot `UMB-<CALLSIGN>` as fallback
+- **LED**: Pi activity LED shows status (booting/online/offline/uploading/error)
 
-```bash
-# store apps in a file called apps.txt
-apps=$(cat <<EOF
-gpsd
-libgps-dev
-gpsd-clients
-libusb-1.0-0-dev
-git
-cmake
-pkg-config
-build-essential
-direwolf
-rpd-plym-splash
-xserver-xorg
-x11-xserver-utils
-xinit
-openbox
-fonts-noto-color-emoji
-chromium-browser
-EOF
-)
-# write the apps to a file
-echo "$apps" > apps.txt
+## Architecture
 
-# do we need to use --svc-disable systemd-timesyncd
-sudo sdm --customize \
---extend --xmb 4096 --expand-root \
---plugin user:"adduser=gs|password=goodsoup" \
---plugin L10n:host \
---plugin disables:piwiz \
---plugin apps:"apps=@apps.txt" \
---plugin serial \
---plugin system:"ledheartbeat" \
---plugin bootconfig:"disable_splash=1" \
---plugin quietness:"consoleblank=0|quiet|nosplash|plymouth" \
---plugin copyfile:"from=./splash.png|to=/usr/share/plymouth/themes/pix/splash|chown=root.root|chmod=0644|mkdirif" \
---plugin btwifiset:"country=US" \
---plugin chrony \
---cscript ./post-install.sh \
---nowait-timesync \
---regen-ssh-host-keys \
---autologin \
---restart 2024-11-19-raspios-bookworm-arm64-lite.img
-
-# this takes ~20 minutes to run
+```txt
+┌───────────────────────────────────────────────────┐
+│                    umbgs binary                   │
+│                                                   │
+│  ┌─────────┐  ┌──────┐  ┌─────┐                   │
+│  │  APRS   │  │ LoRa │  │ GPS │  listeners        │
+│  └────┬────┘  └──┬───┘  └──┬──┘                   │
+│       └──────────┼─────────┘                      │
+│              ┌───▼────┐                           │
+│              │Uploader│──→ API (QUIC/msgpack/gzip)│
+│              └───┬────┘                           │
+│              ┌───▼────┐                           │
+│              │ SQLite │  offline buffer           │
+│              └────────┘                           │
+│  ┌──────────┐  ┌─────────┐  ┌─────────┐           │
+│  │Dashboard │  │ Updater │  │ Network │           │
+│  │ :8080    │  │ A/B slot│  │ NM D-Bus│           │
+│  └──────────┘  └─────────┘  └─────────┘           │
+└───────────────────────────────────────────────────┘
+    External: Direwolf ← RTL-SDR ← radio
+              gpsd ← USB GPS
 ```
 
-```bash
-# post stuff
-# edit /etc/xdg/openbox/autostart with
-xset s off
-xset s noblank
-xset -dpms
+## Prerequisites
 
-# Allow quitting the X server with CTRL-ATL-Backspace
-setxkbmap -option terminate:ctrl_alt_bksp
+- Go 1.22+ (for building)
+- Target: Linux arm64 (Raspberry Pi OS Bookworm Lite)
+- Hardware: RTL-SDR dongle, USB GPS, optional LoRa serial device
 
-# Start Chromium in kiosk mode
-sed -i 's/"exited_cleanly":false/"exited_cleanly":true/' ~/.config/chromium/'Local State'
-sed -i 's/"exited_cleanly":false/"exited_cleanly":true/; s/"exit_type":"[^"]\+"/"exit_type":"Normal"/' ~/.config/chromium/Default/Preferences
-chromium-browser --disable-infobars --kiosk 'http://your-url-here'
+## Building
 
-# then edit .bash_profile with
-[[ -z $DISPLAY && $XDG_VTNR -eq 1 ]] && startx -- -nocursor
-
-rtl_fm -f 144390000 -D 4 | direwolf -n 1 -r 24000 -B 1200 -t 0 -d upomhxxxx -c sdr.conf -
-
-ACHANNELS 1
-ADEVICE null null
-
-GPSD
-
-CHANNEL 0
-
-MYCALL KD8CJT-1
-IGSERVER noam.aprs2.net
-IGLOGIN KD8CJT-9 19121
-
-MODEM 1200
-AGWPORT 8000
-KISSPORT 8001
-
-TBEACON SENDTO=IG DELAY=0:30 EVERY=1 SYMBOL=R& comment="UM Balloon Ground Station 1"
-PBEACON SENDTO=IG DELAY=0:30 EVERY=1 SYMBOL="car" OVERLAY=R lat=42.2943757 long=-83.7110013 alt=271 comment="UM Balloon Ground Station 1"
-
-IGTXLIMIT 6 10
-
-
-```
+### Cross-compile on Mac (or any host)
 
 ```bash
-sudo rm /lib/systemd/system/direwolf.service
-sudo nano /etc/systemd/system/direwolf.service
-
-[Unit]
- Description=RTL_SDR Direwolf
- After=multi-user.target
-
- [Service]
- Type=idle
- WorkingDirectory=/home/gs
- ExecStart=/bin/bash /home/gs/direwolf.sh
- Restart=on-failure
- RestartSec=15
-
- [Install]
- WantedBy=multi-user.target
-
- sudo systemctl daemon-reload
- sudo systemctl enable aprs.service
+cd ground-station/umbgs
+GOOS=linux GOARCH=arm64 go build -ldflags "-s -w -X main.version=dev" -o umbgs ./cmd/umbgs/
 ```
+
+### Build natively on a Pi
 
 ```bash
-sudo apt update
-sudo apt install python3-pip -y
-
-pip3 install pyserial requests --break-system-packages
-
-sudo usermod -a -G dialout $USER
-# need to reboot here
-
-# move lora.py to /home/gs
-chmod +x /home/gs/lora.py
-
-sudo nano /etc/systemd/system/lora.service
-
-[Unit]
-Description=LoRa Serial
-After=network.target multi-user.target # Ensure network is up before starting
-# Optional: If the serial device takes time to appear, you might add:
-# Requires=dev-ttyACM0.device
-# After=dev-ttyACM0.device
-
-[Service]
-ExecStart=/usr/bin/python3 /home/gs/lora.py
-WorkingDirectory=/home/gs/
-StandardOutput=journal # Send stdout to systemd journal
-StandardError=journal  # Send stderr to systemd journal
-Restart=on-failure     # Restart the service if it exits with a non-zero code
-# Or use Restart=always to restart even on clean exit (less common)
-RestartSec=10          # Wait 10 seconds before restarting
-User=gs                # Run the script as the 'pi' user (or your user)
-Group=dialout          # Ensure the process has group permissions for serial port
-# Optional: If using a log file defined in the script, ensure the 'pi' user can write to it:
-# PermissionsStartOnly=true
-# ExecStartPre=/bin/touch /var/log/serial_to_api.log
-# ExecStartPre=/bin/chown pi:pi /var/log/serial_to_api.log
-
-
-[Install]
-WantedBy=multi-user.target # Start the service at multi-user boot level
-
-
-sudo systemctl daemon-reload
-sudo systemctl enable lora.service
-sudo systemctl start lora.service
-
-journalctl -u lora.service -f
-
-# move aprs.py to /home/gs
-chmod +x /home/gs/aprs.py
-
-sudo nano /etc/systemd/system/aprspy.service
-
-[Unit]
-[Unit]
-Description=KISS APRS to API Forwarder
-# Make sure Direwolf is running first, and network is up
-Requires=direwolf.service
-After=network.target direwolf.service
-
-[Service]
-ExecStart=/usr/bin/python3 /home/gs/aprs.py
-WorkingDirectory=/home/gs/
-StandardOutput=journal
-StandardError=journal
-Restart=on-failure
-RestartSec=15
-# Wait a bit longer before restarting
-User=gs
-# Run as 'pi' user (or your user)
-# No specific group needed unless log file permissions require it
-
-# Optional: If using a log file defined in the script
-# PermissionsStartOnly=true
-# ExecStartPre=/bin/touch /var/log/direwolf_to_api.log
-# ExecStartPre=/bin/chown pi:pi /var/log/direwolf_to_api.log
-
-[Install]
-WantedBy=multi-user.target
-
-
-sudo systemctl daemon-reload
-sudo systemctl enable aprspy.service
-sudo systemctl start aprspy.service
-
-journalctl -u aprspy.service -f
-
-
-pip3 install fastapi uvicorn websockets "python-multipart" --break-system-packages
-
-# copy log_server.py to /home/gs
-chmod +x /home/gs/log_server.py
-
-pip3 install psutil --break-system-packages
-sudo apt install wireless-tools -y
-
-sudo usermod -a -G systemd-journal $USER
-
-# need to reboot here
-
-sudo visudo
-gs ALL=(ALL) NOPASSWD: /sbin/reboot
-
-
-sudo nano /etc/systemd/system/log-viewer.service
-
-[Unit]
-Description=Log Viewer Web Server (FastAPI/Uvicorn)
-After=network.target 
-# Needs network to run
-# Optional: Ensure other services are running, though journalctl handles missing units
-# Wants=direwolf.service serial-reader.service direwolf-listener.service
-
-[Service]
-User=gs              
-# CHANGE if you use a different user
-Group=gs             
-# CHANGE if you use a different group
-WorkingDirectory=/home/gs/  
-# CHANGE to your script directory
-Environment="PYTHONUNBUFFERED=1"      
-# Ensures python output isn't buffered
-
-# --- IMPORTANT: Choose the correct ExecStart line ---
-
-# Option 1: If uvicorn is installed globally or in system path
-ExecStart=/usr/bin/python3 -m uvicorn log_server:app --host 0.0.0.0 --port 8000 --workers 1
-
-# Option 2: If uvicorn is installed locally for the user (e.g., with pip3 install --user)
-# First find the path: run 'which uvicorn' or 'find /home/pi/.local -name uvicorn'
-# ExecStart=/home/gs/.local/bin/uvicorn log_server:app --host 0.0.0.0 --port 8000 --workers 1
-
-# --- End ExecStart options ---
-
-Restart=on-failure   
-# Restart if it crashes
-RestartSec=10        
-# Wait 10 seconds before restarting
-StandardOutput=journal 
-# Log this service's output to journald too
-StandardError=journal
-
-[Install]
-WantedBy=multi-user.target
-
-# Reload systemd to recognize the new service file
-sudo systemctl daemon-reload
-
-# Enable the service to start on boot
-sudo systemctl enable log-viewer.service
-
-# Start the service now
-sudo systemctl start log-viewer.service
-
-# Check its status (look for "active (running)")
-sudo systemctl status log-viewer.service
-
-# View logs specifically from the log viewer service itself
-journalctl -u log-viewer.service -f
-
-# open http://127.0.0.1:8000 in chrome
+cd ground-station/umbgs
+go build -ldflags "-s -w -X main.version=dev" -o umbgs ./cmd/umbgs/
 ```
+
+The binary is fully static — no CGo, no external `.so` dependencies.
+
+## Deploying to a Pi
+
+### Option A: Fresh image with Packer (recommended for new Pis)
+
+Packer builds a complete SD card image with all dependencies pre-installed. This runs in CI automatically on GitHub Release, or you can build locally:
 
 ```bash
-# get the SD card device name
-# this will be something like /dev/sdb or /dev/mmcblk0
-sudo fdisk -l
+# Requires Docker (Packer ARM builder runs inside Docker)
+# Run from the repo root
+docker run --rm --privileged \
+  -v /dev:/dev \
+  -v $(pwd):/build \
+  mkaczanowski/packer-builder-arm:latest \
+  build \
+  -var "umbgs_version=dev" \
+  /build/ground-station/packer/ground-station.pkr.json
 
-# write the image to the SD card
-sudo sdm --burn /dev/sda --hostname gs-1 --expand-root 2024-11-19-raspios-bookworm-arm64-lite.img
-
-# this takes ~7.5 minutes to run
+# Output: ground-station/packer/output/umb-ground-station-<date>.img.gz
+# Flash to SD card:
+gunzip -k output/umb-ground-station-*.img.gz
+# On Mac:
+diskutil list                          # find your SD card (e.g., /dev/disk4)
+diskutil unmountDisk /dev/disk4
+sudo dd if=output/umb-ground-station-*.img of=/dev/rdisk4 bs=4m status=progress
+diskutil eject /dev/disk4
 ```
 
+> **Note:** The Packer build requires `--privileged` Docker for loopback device access. On macOS this works via Docker Desktop. The `packer-builder-arm` image handles QEMU aarch64 emulation automatically.
 
-To build a custom Pi image, we will use the `CustomPiOS` docker image.
-
-### 1. Create Distro
-
-> [!NOTE]
-> We are using the `FullPageOS` image as a base for our distro, so you can pull the `FullPageOS` git submodule or use the pre-edited copy of it in `UMBGroundStation` and skip straight to the ["Build Distro"](#2-build-distro) section.
-
-First we use CustomPiOS to help us pull base images and set up the folder structure. We can then modify the folder structure of the image to our liking, preparing scripts and configs.
-
-We use FullPageOS's prebuilt folder structure now, so this step is no longer needed. Modify the configs and scripts in `pi-image/FullPageOS` to your liking instead.
-<!-- You can also add files to the `os_make` folder, which will be copied to the image. -->
-
-<details>
-<summary>Show manual setup without FullPageOS</summary>
-
-Running this docker-compose, you'll see:
+### Option B: Install on existing Pi OS
 
 ```bash
-cd pi-image
-docker compose -f docker-compose-step-1.yml up -d
+# 1. Flash Raspberry Pi OS Lite (64-bit/arm64, Bookworm) to SD card using rpi-imager
+# 2. Boot the Pi, SSH in
+# 3. Copy files to Pi
+scp ground-station/install.sh pi@<pi-ip>:~/
+scp ground-station/umbgs/umbgs pi@<pi-ip>:~/umbgs-binary
+scp ground-station/ground-station.yaml pi@<pi-ip>:~/
 
-Creating network "a_default" with the default driver
-Creating mydistro-create ... done
+# 4. On the Pi:
+ssh pi@<pi-ip>
+
+# Edit config FIRST — set your callsign and WiFi
+nano ~/ground-station.yaml
+sudo cp ~/ground-station.yaml /boot/firmware/ground-station.yaml
+
+# Run the installer (installs deps, systemd units, creates /data partition)
+sudo bash ~/install.sh
+
+# Copy binary to the data partition
+sudo cp ~/umbgs-binary /data/umbgs-a
+sudo chmod +x /data/umbgs-a
+sudo ln -sf /data/umbgs-a /data/umbgs
+
+# Start it
+sudo systemctl start umbgs
+sudo journalctl -u umbgs -f
 ```
 
-Then create a distro, we will call it `UMBGroundStation` for "Umich-Balloons Ground Station" since the distro name cannot contain a hyphen.
+### Option C: Manual testing (no install script)
 
 ```bash
-# Optional -g flag will also download you the latest version of raspbian in to the image folder, don't need if you are using another base image
-docker exec -it mydistro-create CustomPiOS/make_custom_pi_os -g /os_make/UMBGroundStation
+# Copy binary and config to Pi
+scp umbgs pi@<pi-ip>:/tmp/
+scp ground-station.yaml pi@<pi-ip>:/tmp/
 
-# Run this with your current user ID so you have permissions to edit the file
-docker exec -it mydistro-create chown 1000:1000 -R /os_make/UMBGroundStation
+ssh pi@<pi-ip>
+
+# Install just the essentials
+sudo apt update && sudo apt install -y direwolf gpsd chrony
+
+# Put config where umbgs expects it
+sudo mkdir -p /boot/firmware
+sudo cp /tmp/ground-station.yaml /boot/firmware/
+
+# Create data dir
+sudo mkdir -p /data
+
+# Run directly (Ctrl+C to stop)
+sudo /tmp/umbgs 2>&1 | jq .
 ```
 
-</details>
+## Configuration
 
-### 2. Build Distro
+Config lives at `/boot/firmware/ground-station.yaml` — readable from any OS by mounting the FAT32 boot partition. See [ground-station.yaml](ground-station.yaml) for the annotated template.
 
-Now there should be a folder called `UMBGroundStation` in your `pi-image` directory. This folder contains the distro files. You can edit the files in this folder to customize your distro.
+Key settings to change:
 
-Then you can build the example distro:
+- `callsign`: Your FCC amateur radio callsign (required)
+- `wifi.networks`: WiFi SSID/password pairs
+- `aprs.frequency`: 144.390 MHz for North America
+
+The dashboard at `http://<pi-ip>:8080` has a Config tab for live editing.
+
+## CI / Releases
+
+GitHub Actions ([ground-station.yml](../.github/workflows/ground-station.yml)) handles:
+
+1. **Build** — `go vet`, `go test`, cross-compile on every push/PR touching `ground-station/umbgs/`
+2. **Release** — uploads `umbgs-linux-arm64` binary + SHA256 to GitHub Release
+3. **Image** — builds Packer SD card image, uploads `.img.gz` to GitHub Release
+
+To release: create a GitHub Release (tag like `v0.1.0`). CI builds and attaches the binary and image.
+
+## Updates
+
+Updates are triggered **manually** from the dashboard (`POST /api/update`) or via `kill -USR1 <pid>` for debug snapshots. There is no automatic polling.
+
+Update flow:
+
+1. User clicks "Check for Update" in dashboard (or `curl -X POST http://localhost:8080/api/update`)
+2. Downloads new binary to inactive A/B slot (e.g., `/data/umbgs-b`)
+3. Verifies SHA256
+4. Writes `pending` file, switches `active` pointer, restarts
+5. Watchdog timer (every 5 min) checks: if `pending` file is >10 min old, rolls back to previous slot
+
+Disable with `update.enabled: false` in config.
+
+## Logging
+
+- Structured JSON logs go to both **stdout** (journald) and `/data/logs/umbgs.log`
+- Log file auto-rotates at 10 MB (keeps one `.1` backup)
+- Send `SIGUSR1` to dump a debug snapshot to `/boot/firmware/debug-snapshot-<timestamp>.log` (readable from any computer via SD card FAT32 partition)
+
+## Project Structure
+
+```txt
+ground-station/
+├── assets/                  # Splash screen images
+├── ground-station.yaml      # Default config template
+├── install.sh               # Standalone Pi installer
+├── watchdog.sh              # A/B rollback watchdog
+├── systemd/                 # Service unit files
+│   ├── umbgs.service
+│   ├── umbgs-watchdog.service
+│   ├── umbgs-watchdog.timer
+│   └── direwolf.service
+├── packer/
+│   └── ground-station.pkr.json  # Packer ARM image config
+└── umbgs/                   # Go source
+    ├── go.mod
+    ├── cmd/umbgs/main.go    # Entrypoint + orchestrator
+    └── internal/
+        ├── aprs/            # Direwolf KISS listener
+        ├── buffer/          # SQLite offline buffer
+        ├── config/          # YAML config + hot reload
+        ├── connectivity/    # NetworkManager D-Bus monitor
+        ├── dashboard/       # Web UI + WebSocket + log aggregator
+        ├── direwolf/        # direwolf.conf generator
+        ├── gps/             # gpsd client
+        ├── led/             # Activity LED control
+        ├── lora/            # USB serial reader
+        ├── network/         # WiFi sync + AP hotspot
+        ├── system/          # CPU/RAM/temp/uptime stats
+        ├── types/           # Shared data types
+        ├── updater/         # A/B slot updater
+        └── uploader/        # QUIC/HTTP + msgpack + gzip
+```
+
+## Troubleshooting
 
 ```bash
-# Setup the docker-compose file (should exist in 'pi-image' folder)
-# NOTE: If you built a custom distro in the last step, you'll need modify
-# the docker-compose file to use your distro name instead of `UMBGroundStation`
-docker compose -f docker-compose-step-2.yml up -d
+# Check service status
+sudo systemctl status umbgs direwolf gpsd
 
-# now set a base board and download the image
-# get a list of available base boards with:
-docker exec -it mydistro-build build --board list
+# Live logs (structured JSON)
+sudo journalctl -u umbgs -f | jq .
 
-# then set the base board and download with:
-docker exec -it mydistro-build build --download --board raspberrypiarm64
+# Check which binary slot is active
+cat /data/active
+
+# Check if an update is pending
+ls -la /data/pending
+
+# Force rollback
+sudo /usr/local/bin/umbgs-watchdog.sh
+
+# Dashboard
+open http://<pi-ip>:8080
+
+# Check RTL-SDR is detected
+rtl_test
+
+# Check GPS
+gpsmon
 ```
-
-Note: this can take a while. On my MacBook Air M4 it took ~8 minutes for reference.

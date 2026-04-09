@@ -1,0 +1,57 @@
+# UMich Balloons Ground Station Configuration
+# Place this file at /boot/firmware/ground-station.yaml on the Pi.
+# The ground station binary reads it on startup.
+
+# REQUIRED: Your FCC amateur radio callsign
+callsign: "CHANGE_ME"
+
+# SSID suffix (0-15). Combined as CALLSIGN-SSID (e.g., KD8CJT-9)
+ssid: 9
+
+# API endpoint for packet uploads
+api_url: "https://api.umich-balloons.com"
+
+# Logging verbosity: debug, info, warn, error
+log_level: "info"
+
+# WiFi networks to auto-connect (highest priority first)
+wifi:
+  networks:
+    - ssid: "MyNetwork"
+      psk: "MyPassword"
+    # - ssid: "BackupNetwork"
+    #   psk: "BackupPassword"
+
+# APRS via Direwolf + RTL-SDR
+aprs:
+  enabled: true
+  kiss_host: "127.0.0.1"
+  kiss_port: 8001
+  frequency: 144.390   # MHz (North America standard)
+  gain: 42             # RTL-SDR gain (0-49, or 0 for auto)
+
+# LoRa via USB serial (Arduino/ESP32)
+lora:
+  enabled: true
+  baud: 9600
+  # device: "/dev/ttyUSB0"  # Auto-detected if blank
+
+# GPS via gpsd
+gps:
+  enabled: true
+  report_interval: 60  # Seconds between position reports to API
+
+# Local web dashboard
+dashboard:
+  enabled: true
+  port: 8080
+
+# Kiosk display (cage + chromium on attached screen)
+display:
+  enabled: false
+  url: "http://localhost:8080"
+
+# Over-the-air binary updates
+update:
+  enabled: true
+  channel: "stable"    # stable or beta

@@ -8,7 +8,7 @@ import {
   handleStation,
 } from "./handlers";
 
-const MAX_BODY = 4096;
+const MAX_BODY = 8192; // Increased for msgpack+gzip payloads
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {

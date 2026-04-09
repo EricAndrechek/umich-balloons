@@ -1,0 +1,25 @@
+[Unit]
+Description=UMB Ground Station
+After=network-online.target gpsd.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/data/umbgs
+Restart=always
+RestartSec=5
+WatchdogSec=120
+Environment=GOGC=50
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=umbgs
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/data
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

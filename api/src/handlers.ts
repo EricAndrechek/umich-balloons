@@ -2,6 +2,7 @@ import { type Telemetry, now, formatTime, uploadToSondehub, type ListenerPositio
 import { parseLoRaJSON, parseTimestamp, parseTField } from "./normalize";
 import { parseAPRS } from "./aprs";
 import { verifyIridiumJWT } from "./jwt";
+import { decodeBody } from "./msgpack";
 
 export interface Env {
   SONDEHUB_API_URL: string;
@@ -42,7 +43,7 @@ export function handleHealth(): Response {
 
 // POST /aprs — JSON body with raw_data field
 export async function handleAPRS(request: Request, env: Env): Promise<Response> {
-  const body = (await request.json()) as { sender?: string; raw_data?: string; timestamp?: string };
+  const body = (await decodeBody(request)) as { sender?: string; raw_data?: string; timestamp?: string };
   if (!body.raw_data) {
     return jsonResponse({ error: "missing raw_data" }, 400);
   }
@@ -90,7 +91,7 @@ export async function handleAPRSRaw(request: Request, env: Env): Promise<Respons
 
 // POST /lora — JSON with raw_data (object or JSON string)
 export async function handleLoRa(request: Request, env: Env): Promise<Response> {
-  const body = (await request.json()) as { sender?: string; raw_data?: unknown; timestamp?: string };
+  const body = (await decodeBody(request)) as { sender?: string; raw_data?: unknown; timestamp?: string };
   if (body.raw_data === undefined || body.raw_data === null) {
     return jsonResponse({ error: "missing raw_data" }, 400);
   }

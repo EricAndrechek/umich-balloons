@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=2.0, user-scalable=no">
+<title>UMB Ground Station</title>
+<style>
+:root {
+  --bg: #1a1a1a; --panel: #2c2c2c; --border: #4f5254;
+  --text: #e0e0e0; --muted: #a0a0a0;
+  --green: #5cb85c; --amber: #f0ad4e; --red: #d9534f; --blue: #5bc0de;
+  --font: 18px; --mono: 'SF Mono',Monaco,Consolas,monospace;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; }
+body {
+  font-family: -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+  background: var(--bg); color: var(--text); font-size: var(--font);
+  display: flex; flex-direction: column; overflow: hidden;
+  user-select: none; -webkit-user-select: none;
+}
+#tabs {
+  display: flex; background: #313335; flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+}
+.tab {
+  flex: 1; padding: 10px 8px; border: none; background: none;
+  color: var(--muted); font-size: 1em; font-weight: 500;
+  text-align: center; cursor: pointer; border-bottom: 4px solid transparent;
+  min-height: 44px;
+}
+.tab:hover { background: #454749; }
+.tab.active { color: var(--text); font-weight: 600; border-bottom-color: var(--green); }
+#main { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+.page { display: none; padding: 12px; height: 100%; overflow-y: auto; }
+.page.active { display: block; }
+.card {
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 6px; padding: 12px; margin-bottom: 12px;
+}
+.card h3 { font-size: 1em; color: var(--muted); margin-bottom: 8px; }
+.stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.stat { text-align: center; }
+.stat .val { font-size: 1.6em; font-weight: 700; }
+.stat .label { font-size: .8em; color: var(--muted); }
+.online { color: var(--green); }
+.offline { color: var(--red); }
+.warn { color: var(--amber); }
+#status-dot {
+  display: inline-block; width: 12px; height: 12px;
+  border-radius: 50%; margin-right: 6px; vertical-align: middle;
+}
+#status-dot.on { background: var(--green); }
+#status-dot.off { background: var(--red); }
+#log-list {
+  font-family: var(--mono); font-size: .85em; line-height: 1.5;
+  max-height: calc(100vh - 120px); overflow-y: auto;
+}
+.log-line { padding: 2px 4px; border-bottom: 1px solid #333; white-space: pre-wrap; word-break: break-all; }
+.log-line.ERROR { color: var(--red); }
+.log-line.WARN { color: var(--amber); }
+.log-line.DEBUG { color: var(--muted); }
+#pkt-list { font-family: var(--mono); font-size: .85em; }
+.pkt {
+  padding: 6px 4px; border-bottom: 1px solid #333;
+  display: flex; justify-content: space-between; align-items: center;
+}
+.pkt .src { font-weight: 600; min-width: 50px; }
+.pkt .raw { flex: 1; margin: 0 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pkt .st { font-size: .85em; padding: 2px 6px; border-radius: 3px; }
+.pkt .st.ok { background: #2a4a2a; color: var(--green); }
+.pkt .st.buf { background: #4a3a1a; color: var(--amber); }
+.pkt .st.fail { background: #4a1a1a; color: var(--red); }
+.cfg-field { margin-bottom: 10px; }
+.cfg-field label { display: block; font-size: .85em; color: var(--muted); margin-bottom: 2px; }
+.cfg-field input, .cfg-field select {
+  width: 100%; padding: 8px; font-size: 1em;
+  background: #3a3a3a; color: var(--text); border: 1px solid var(--border);
+  border-radius: 4px;
+}
+.btn {
+  padding: 10px 20px; font-size: 1em; border: none; border-radius: 4px;
+  cursor: pointer; font-weight: 600;
+}
+.btn-primary { background: var(--green); color: #fff; }
+.btn-danger { background: var(--red); color: #fff; }
+.svc-row { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid #333; }
+.svc-row .name { font-weight: 600; }
+.svc-row .status { font-size: .85em; }
+</style>
+</head>
+<body>
+<div id="tabs">
+  <button class="tab active" data-page="overview">Overview</button>
+  <button class="tab" data-page="packets">Packets</button>
+  <button class="tab" data-page="logs">Logs</button>
+  <button class="tab" data-page="config">Config</button>
+</div>
+<div id="main">
+  <!-- Overview -->
+  <div id="overview" class="page active">
+    <div class="card">
+      <h3><span id="status-dot" class="off"></span> Station Status</h3>
+      <div class="stat-grid">
+        <div class="stat"><div class="val" id="s-callsign">--</div><div class="label">Callsign</div></div>
+        <div class="stat"><div class="val" id="s-online">--</div><div class="label">Connectivity</div></div>
+        <div class="stat"><div class="val" id="s-uptime">--</div><div class="label">Uptime</div></div>
+        <div class="stat"><div class="val" id="s-version">--</div><div class="label">Version</div></div>
+      </div>
+    </div>
+    <div class="card">
+      <h3>System</h3>
+      <div class="stat-grid">
+        <div class="stat"><div class="val" id="s-cpu">--</div><div class="label">CPU %</div></div>
+        <div class="stat"><div class="val" id="s-ram">--</div><div class="label">RAM %</div></div>
+        <div class="stat"><div class="val" id="s-temp">--</div><div class="label">Temp °C</div></div>
+        <div class="stat"><div class="val" id="s-led">--</div><div class="label">LED</div></div>
+      </div>
+    </div>
+    <div class="card">
+      <h3>GPS</h3>
+      <div class="stat-grid">
+        <div class="stat"><div class="val" id="s-gps">--</div><div class="label">Fix</div></div>
+        <div class="stat"><div class="val" id="s-alt">--</div><div class="label">Alt (m)</div></div>
+        <div class="stat"><div class="val" id="s-lat">--</div><div class="label">Lat</div></div>
+        <div class="stat"><div class="val" id="s-lon">--</div><div class="label">Lon</div></div>
+      </div>
+    </div>
+    <div class="card">
+      <h3>Buffer</h3>
+      <div class="stat-grid">
+        <div class="stat"><div class="val" id="s-buf">0</div><div class="label">Queued</div></div>
+        <div class="stat"><div class="val" id="s-fail">0</div><div class="label">Failed</div></div>
+      </div>
+    </div>
+  </div>
+  <!-- Packets -->
+  <div id="packets" class="page">
+    <div id="pkt-list"></div>
+    <p id="pkt-empty" style="color:var(--muted);text-align:center;padding:40px;">Waiting for packets...</p>
+  </div>
+  <!-- Logs -->
+  <div id="logs" class="page">
+    <div id="log-list"></div>
+  </div>
+  <!-- Config -->
+  <div id="config" class="page">
+    <div class="card" id="cfg-form">
+      <h3>Configuration</h3>
+      <p style="color:var(--muted);font-size:.85em;">Loading...</p>
+    </div>
+  </div>
+</div>
+<script>
+(function(){
+  const MAX_LOGS = 500, MAX_PKTS = 200;
+  let ws, reconnTimer;
+
+  // Tabs
+  document.querySelectorAll('.tab').forEach(t => {
+    t.addEventListener('click', () => {
+      document.querySelectorAll('.tab').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+      t.classList.add('active');
+      document.getElementById(t.dataset.page).classList.add('active');
+    });
+  });
+
+  function connect() {
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    ws = new WebSocket(proto + '//' + location.host + '/ws');
+    ws.onopen = () => { clearTimeout(reconnTimer); };
+    ws.onclose = () => { reconnTimer = setTimeout(connect, 3000); };
+    ws.onerror = () => { ws.close(); };
+    ws.onmessage = (e) => {
+      try { handleMsg(JSON.parse(e.data)); } catch(err) { console.error(err); }
+    };
+  }
+
+  function handleMsg(msg) {
+    switch(msg.type) {
+      case 'stats': updateStats(msg.data); break;
+      case 'packet': addPacket(msg.data); break;
+      case 'log': addLog(msg.data); break;
+    }
+  }
+
+  function updateStats(s) {
+    const dot = document.getElementById('status-dot');
+    dot.className = s.online ? 'on' : 'off';
+    setText('s-online', s.online ? 'Online' : 'Offline');
+    document.getElementById('s-online').className = 'val ' + (s.online ? 'online' : 'offline');
+    setText('s-cpu', s.cpu_percent.toFixed(1));
+    setText('s-ram', s.ram_percent.toFixed(1));
+    setText('s-temp', s.cpu_temp_c.toFixed(1));
+    setText('s-uptime', fmtUptime(s.uptime_seconds));
+    setText('s-version', s.version || '--');
+    setText('s-led', s.led_state || '--');
+    setText('s-buf', s.buffer_depth);
+    setText('s-fail', s.failed_count);
+    const bufEl = document.getElementById('s-buf');
+    bufEl.className = 'val' + (s.buffer_depth > 0 ? ' warn' : '');
+    const failEl = document.getElementById('s-fail');
+    failEl.className = 'val' + (s.failed_count > 0 ? ' offline' : '');
+    setText('s-gps', s.gps_fix ? 'Yes' : 'No');
+    document.getElementById('s-gps').className = 'val ' + (s.gps_fix ? 'online' : 'muted');
+    setText('s-lat', s.gps_fix ? s.gps_lat.toFixed(6) : '--');
+    setText('s-lon', s.gps_fix ? s.gps_lon.toFixed(6) : '--');
+    setText('s-alt', s.gps_fix ? s.gps_alt.toFixed(1) : '--');
+  }
+
+  function addPacket(evt) {
+    const list = document.getElementById('pkt-list');
+    const empty = document.getElementById('pkt-empty');
+    if (empty) empty.style.display = 'none';
+    const p = evt.packet || evt.Packet || {};
+    const status = evt.status !== undefined ? evt.status : evt.Status;
+    const stClass = status === 0 ? 'ok' : status === 2 ? 'buf' : 'fail';
+    const stText = status === 0 ? 'OK' : status === 2 ? 'BUF' : 'FAIL';
+    const div = document.createElement('div');
+    div.className = 'pkt';
+    div.innerHTML = '<span class="src">' + esc(p.Source || p.source || '?') + '</span>' +
+      '<span class="raw">' + esc(p.RawData || p.raw_data || '') + '</span>' +
+      '<span class="st ' + stClass + '">' + stText + '</span>';
+    list.insertBefore(div, list.firstChild);
+    while (list.children.length > MAX_PKTS) list.removeChild(list.lastChild);
+  }
+
+  function addLog(entry) {
+    const list = document.getElementById('log-list');
+    const div = document.createElement('div');
+    const lvl = entry.Level || entry.level || 'INFO';
+    div.className = 'log-line ' + lvl;
+    const svc = entry.Service || entry.service || '';
+    const msg = entry.Message || entry.message || '';
+    div.textContent = '[' + svc + '] ' + msg;
+    list.appendChild(div);
+    while (list.children.length > MAX_LOGS) list.removeChild(list.firstChild);
+    list.scrollTop = list.scrollHeight;
+  }
+
+  function setText(id, v) { document.getElementById(id).textContent = v; }
+  function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+  function fmtUptime(s) {
+    if (!s) return '--';
+    const h = Math.floor(s/3600), m = Math.floor((s%3600)/60);
+    return h + 'h ' + m + 'm';
+  }
+
+  // Load config
+  function loadConfig() {
+    fetch('/api/config').then(r => r.json()).then(cfg => {
+      const form = document.getElementById('cfg-form');
+      form.innerHTML = '<h3>Configuration</h3>';
+      const fields = [
+        {key:'callsign',label:'Callsign',type:'text'},
+        {key:'ssid',label:'SSID (0-15)',type:'number'},
+        {key:'api_url',label:'API URL',type:'text'},
+        {key:'log_level',label:'Log Level',type:'text'},
+      ];
+      fields.forEach(f => {
+        const d = document.createElement('div');
+        d.className = 'cfg-field';
+        d.innerHTML = '<label>' + f.label + '</label><input type="' + f.type + '" id="cfg-' + f.key + '" value="' + esc(String(cfg[f.key]||'')) + '">';
+        form.appendChild(d);
+      });
+      const btn = document.createElement('button');
+      btn.className = 'btn btn-primary';
+      btn.textContent = 'Save';
+      btn.onclick = saveConfig;
+      form.appendChild(btn);
+    }).catch(() => {});
+  }
+
+  function saveConfig() {
+    fetch('/api/config').then(r => r.json()).then(cfg => {
+      cfg.callsign = document.getElementById('cfg-callsign').value;
+      cfg.ssid = parseInt(document.getElementById('cfg-ssid').value) || 0;
+      cfg.api_url = document.getElementById('cfg-api_url').value;
+      cfg.log_level = document.getElementById('cfg-log_level').value;
+      return fetch('/api/config', {
+        method: 'PUT',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify(cfg)
+      });
+    }).then(r => r.json()).then(res => {
+      if (res.ok) alert('Config saved.' + (res.restart_needed?.length ? ' Restart needed: ' + res.restart_needed.join(', ') : ''));
+    }).catch(e => alert('Error: ' + e));
+  }
+
+  // Init
+  connect();
+  loadConfig();
+  // Fetch callsign for overview
+  fetch('/api/config').then(r=>r.json()).then(c=>{
+    let cs = (c.callsign||'').toUpperCase();
+    if(c.ssid>0) cs += '-'+c.ssid;
+    setText('s-callsign', cs||'--');
+  }).catch(()=>{});
+})();
+</script>
+</body>
+</html>

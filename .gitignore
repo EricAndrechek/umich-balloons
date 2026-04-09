@@ -17,6 +17,16 @@
 
 .wrangler
 
+# Go build output
+umbgs
+!umbgs/
+
+# Packer output
+output/
+*.img
+*.img.gz
+*.img.xz
+
 # kicad
 *.bak
 *.kicad_pcb-bak
