@@ -293,6 +293,12 @@ function mapToTelemetry(data: Record<string, unknown>, sender: string, modulatio
   if (lonRaw === undefined) throw new Error("missing required field: longitude");
   const lon = parseCoordinate(lonRaw, "lon");
 
+  // Detect compact firmware format where lat/lon are integer-scaled (×10000).
+  // When coords are scaled, altitude is encoded in hectometers (×100).
+  const compactFormat =
+    (typeof latRaw === "number" && (latRaw > 90 || latRaw < -90)) ||
+    (typeof lonRaw === "number" && (lonRaw > 180 || lonRaw < -180));
+
   if (lat === 0 && lon === 0) {
     throw new Error("position 0,0 rejected (likely invalid GPS)");
   }
@@ -314,7 +320,7 @@ function mapToTelemetry(data: Record<string, unknown>, sender: string, modulatio
   const altRaw = resolveAlias(data, FIELD_ALIASES.altitude);
   if (altRaw !== undefined) {
     const alt = toFloat64(altRaw);
-    if (alt !== undefined) t.alt = alt;
+    if (alt !== undefined) t.alt = compactFormat ? alt * 100 : alt;
   }
 
   // Timestamp

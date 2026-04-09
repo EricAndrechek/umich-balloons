@@ -263,17 +263,22 @@ def send_lora_relay(relay_url: str, callsign: str, lat: float, lon: float,
                     alt_m: float, course: int, speed_ms: float, batt_mv: int,
                     sats: int, temp: float, t_hhmm: int,
                     sender: str, ts: datetime):
-    """POST /lora to Go relay."""
+    """POST /lora to Go relay.
+
+    Matches real balloon firmware compact format (same as Iridium inner payload):
+      {"call":"KF8ABL-11","lat":422949,"lon":-837107,"alt":3,"dir":45,"spd":2,"v":46,"t":1937}
+    Where lat/lon are *10000, alt is in hectometers (m/100), v is voltage*10.
+    """
     resp = requests.post(f"{relay_url}/lora", json={
         "sender": sender,
         "raw_data": {
-            "callsign": callsign,
-            "lat": lat,
-            "lon": lon,
-            "alt": alt_m,
-            "heading": course,
-            "speed": speed_ms,
-            "battery": batt_mv,
+            "call": callsign,
+            "lat": int(round(lat * 10000)),
+            "lon": int(round(lon * 10000)),
+            "alt": int(alt_m / 100),
+            "dir": course,
+            "spd": int(round(speed_ms)),
+            "v": int(batt_mv / 100),
             "sats": sats,
             "temp": temp,
             "t": t_hhmm,
@@ -290,14 +295,15 @@ def send_iridium_relay(relay_url: str, imei: str, callsign: str,
     """POST /iridium to Go relay (JWT skipped in dev mode).
 
     Matches real RockBLOCK payload format:
-      {"call":"KF8ABL-11","lat":422949,"lon":-837107,"alt":2,"dir":238,"spd":0,"v":46,"t":1937}
-    Where lat/lon are *10000, v is voltage*10, t is HHMM UTC (e.g. 1937 = 19:37).
+      {"call":"KF8ABL-11","lat":422949,"lon":-837107,"alt":3,"dir":238,"spd":0,"v":46,"t":1937}
+    Where lat/lon are *10000, alt is in hectometers (m/100), v is voltage*10,
+    t is HHMM UTC (e.g. 1937 = 19:37).
     """
     inner_payload = json.dumps({
         "call": callsign,
         "lat": int(round(lat * 10000)),
         "lon": int(round(lon * 10000)),
-        "alt": int(alt_m),
+        "alt": int(alt_m / 100),
         "dir": course,
         "spd": int(round(speed_ms)),
         "v": batt_v_x10,
