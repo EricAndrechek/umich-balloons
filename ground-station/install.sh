@@ -23,7 +23,7 @@ log "Installing system dependencies..."
 apt-get update -qq
 apt-get install -y -qq \
     direwolf \
-    gpsd gpsd-clients \
+    gpsd gpsd-tools \
     chrony \
     network-manager \
     cage \
