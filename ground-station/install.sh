@@ -1,7 +1,7 @@
 #!/bin/bash
 # install.sh - UMB Ground Station installer
 # Works standalone or as part of Packer image build.
-# Usage: curl -fsSL https://raw.githubusercontent.com/.../install.sh | sudo bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/EricAndrechek/umich-balloons/refs/heads/main/ground-station/install.sh | sudo bash
 set -euo pipefail
 
 UMBGS_VERSION="${UMBGS_VERSION:-latest}"
