@@ -102,7 +102,6 @@ jobs:
         run: |
           VERSION="${GITHUB_REF#refs/tags/}"
           chmod +x umbgs-linux-arm64
-          mkdir -p ground-station/packer/output
           docker run --rm --privileged \
             -v /dev:/dev \
             -v $(pwd):/build \
@@ -114,4 +113,4 @@ jobs:
       - name: Upload image to release
         uses: softprops/action-gh-release@v2
         with:
-          files: ground-station/packer/output/*.img.gz
+          files: output/*.img.gz
