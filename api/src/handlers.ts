@@ -29,7 +29,7 @@ function jsonResponse(body: Record<string, unknown>, status = 200): Response {
 async function forwardToSondehub(telem: Telemetry, env: Env): Promise<Response> {
   const result = await uploadToSondehub(telem, env.SONDEHUB_API_URL, env.SOFTWARE_NAME, commitSha(env));
   if (result.status >= 200 && result.status < 300) {
-    console.log(`SondeHub upload successful: callsign=${telem.payload_callsign}`);
+    console.log(`SondeHub upload successful: callsign=${telem.payload_callsign}, sondehub_status=${result.status}, sondehub_body=${result.body}`);
     return jsonResponse({ status: "accepted" }, 202);
   }
   console.error(`SondeHub upload failed ${result.status}: ${result.body}`);
@@ -126,16 +126,21 @@ export async function handleLoRa(request: Request, env: Env): Promise<Response> 
   // Use ground station's reception timestamp as time_received
   if (rxTimestamp) telem.time_received = rxTimestamp;
 
+  console.log(`LoRa raw_data: ${JSON.stringify(rawData)}`);
+  console.log(`LoRa after parse: callsign=${telem.payload_callsign}, lat=${telem.lat}, lon=${telem.lon}, alt=${telem.alt}, datetime=${telem.datetime}, time_received=${telem.time_received}, t=${telem.t}`);
+
   // Parse t field (HHMM) for datetime if present
   if (typeof telem.t === "number" && rxTimestamp) {
     const refDate = new Date(rxTimestamp);
     const parsed = parseTField(telem.t, refDate);
+    console.log(`LoRa t-field: t=${telem.t}, refDate=${refDate.toISOString()}, parsed=${parsed}`);
     if (parsed) telem.datetime = parsed;
     delete telem.t;
   }
 
   // Fallback: datetime → time_received
   if (!telem.datetime && telem.time_received) {
+    console.log(`LoRa datetime fallback to time_received: ${telem.time_received}`);
     telem.datetime = telem.time_received;
   }
 
@@ -224,6 +229,10 @@ export async function handleIridium(request: Request, env: Env): Promise<Respons
   // Override modulation
   telem.modulation = "Iridium";
 
+  console.log(`Iridium decoded payload: ${JSON.stringify(payload)}`);
+  console.log(`Iridium transmit_time=${req.transmit_time}, transmitDate=${transmitDate?.toISOString()}`);
+  console.log(`Iridium after parse: callsign=${telem.payload_callsign}, lat=${telem.lat}, lon=${telem.lon}, alt=${telem.alt}, datetime=${telem.datetime}, time_received=${telem.time_received}, t=${telem.t}`);
+
   // Set time_received from Iridium transmit_time
   if (transmitDate) {
     telem.time_received = formatTime(transmitDate);
@@ -232,12 +241,14 @@ export async function handleIridium(request: Request, env: Env): Promise<Respons
   // Parse t field (HHMM) for datetime if present
   if (typeof telem.t === "number" && transmitDate) {
     const parsed = parseTField(telem.t, transmitDate);
+    console.log(`Iridium t-field: t=${telem.t}, transmitDate=${transmitDate.toISOString()}, parsed=${parsed}`);
     if (parsed) telem.datetime = parsed;
     delete telem.t;
   }
 
   // Fallback: datetime → time_received
   if (!telem.datetime && telem.time_received) {
+    console.log(`Iridium datetime fallback to time_received: ${telem.time_received}`);
     telem.datetime = telem.time_received;
   }
 

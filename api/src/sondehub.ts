@@ -57,6 +57,7 @@ export async function uploadToSondehub(
   }
 
   const payload = JSON.stringify([telem]);
+  console.log(`SondeHub payload: ${payload}`);
   const compressed = await gzipEncode(new TextEncoder().encode(payload));
 
   const res = await fetchWithRetry(apiURL + "/amateur/telemetry", compressed, softwareName, softwareVersion);
