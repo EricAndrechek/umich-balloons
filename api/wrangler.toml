@@ -8,7 +8,12 @@ pattern = "api.umich-balloons.com"
 custom_domain = true
 
 [observability]
+[observability.logs]
 enabled = true
+invocation_logs = true
+
+[observability.traces]
+enabled = false
 
 [vars]
 SONDEHUB_API_URL = "https://api.v2.sondehub.org"
