@@ -52,6 +52,9 @@ export async function uploadToSondehub(
   if (!telem.time_received) {
     telem.time_received = now();
   }
+  if (!telem.datetime) {
+    telem.datetime = telem.time_received;
+  }
 
   const payload = JSON.stringify([telem]);
   const compressed = await gzipEncode(new TextEncoder().encode(payload));
@@ -127,4 +130,29 @@ async function fetchWithRetry(
   }
 
   return { status: 500, body: `upload failed after ${maxRetries} retries: ${lastErr}` };
+}
+
+export interface ListenerPosition {
+  software_name: string;
+  software_version: string;
+  uploader_callsign: string;
+  uploader_position: [number, number, number];
+  uploader_antenna?: string;
+  uploader_contact_email?: string;
+  mobile: boolean;
+}
+
+export async function uploadListenerPosition(
+  position: ListenerPosition,
+  apiURL: string,
+): Promise<{ status: number; body: string }> {
+  const payload = JSON.stringify(position);
+  const compressed = await gzipEncode(new TextEncoder().encode(payload));
+
+  return fetchWithRetry(
+    apiURL + "/amateur/listeners",
+    compressed,
+    position.software_name,
+    position.software_version,
+  );
 }

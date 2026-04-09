@@ -12,7 +12,8 @@
 **/*.db
 **/.env
 **/.dev.vars
-**/.test_state.json
+**/.test_state*.json
+**/.test_state.db
 
 .wrangler
 

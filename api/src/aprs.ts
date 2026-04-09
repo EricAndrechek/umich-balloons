@@ -1,4 +1,4 @@
-import { type Telemetry, now } from "./sondehub";
+import { type Telemetry, now, formatTime } from "./sondehub";
 import { validateCallsign, normalizeCourse } from "./normalize";
 
 // APRS position report data type identifiers
@@ -11,6 +11,33 @@ const POSITION_TYPES = new Set([
 
 const ALTITUDE_RE = /\/A=(-?\d{6})/;
 const SPEED_COURSE_RE = /^(\d{3})\/(\d{3})/;
+
+// Parse APRS DDHHMMz timestamp into a Date
+function parseAPRSTimestamp(ts: string): Date | undefined {
+  if (ts.length < 7) return undefined;
+  const dd = parseInt(ts.slice(0, 2), 10);
+  const hh = parseInt(ts.slice(2, 4), 10);
+  const mm = parseInt(ts.slice(4, 6), 10);
+  if (isNaN(dd) || isNaN(hh) || isNaN(mm)) return undefined;
+  if (dd < 1 || dd > 31 || hh > 23 || mm > 59) return undefined;
+
+  const now = new Date();
+  let year = now.getUTCFullYear();
+  let month = now.getUTCMonth(); // 0-based
+
+  // If parsed day is greater than current day, assume previous month
+  if (dd > now.getUTCDate()) {
+    month -= 1;
+    if (month < 0) {
+      month = 11;
+      year -= 1;
+    }
+  }
+
+  const d = new Date(Date.UTC(year, month, dd, hh, mm, 0, 0));
+  if (isNaN(d.getTime())) return undefined;
+  return d;
+}
 
 export function parseAPRS(raw: string, uploaderCallsign: string): Telemetry {
   const colonIdx = raw.indexOf(":");
@@ -33,11 +60,17 @@ export function parseAPRS(raw: string, uploaderCallsign: string): Telemetry {
     throw new Error(`unsupported APRS data type: ${info[0]}`);
   }
 
-  // Skip timestamp if present (/ or @ types)
+  // Parse or skip timestamp
   let body = info.slice(1);
+  let parsedDatetime: string = "";
   if (dataType === 0x2f || dataType === 0x40) {
     if (body.length < 7) throw new Error("APRS timestamp too short");
+    const tsStr = body.slice(0, 7);
     body = body.slice(7);
+    const aprsDate = parseAPRSTimestamp(tsStr);
+    if (aprsDate) {
+      parsedDatetime = formatTime(aprsDate);
+    }
   }
 
   let lat: number;
@@ -56,7 +89,7 @@ export function parseAPRS(raw: string, uploaderCallsign: string): Telemetry {
     uploader_callsign: uploaderCallsign,
     time_received: "",
     payload_callsign: validated,
-    datetime: now(),
+    datetime: parsedDatetime,
     lat,
     lon,
     alt: 0,

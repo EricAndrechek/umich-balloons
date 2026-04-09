@@ -35,6 +35,22 @@ try:
 except Exception as e:
     print(f"WARNING: Could not get hostname: {e}", file=sys.stderr)
     PI_HOSTNAME = "unknown_hostname"
+
+# --- Get Callsign from config (fallback to hostname) ---
+STATION_CALLSIGN = PI_HOSTNAME
+try:
+    with open('/etc/ground-station.conf', 'r') as f:
+        for line in f:
+            line = line.strip()
+            if line.startswith('CALLSIGN='):
+                val = line.split('=', 1)[1].strip().strip('"').strip("'")
+                if val:
+                    STATION_CALLSIGN = val
+                    break
+except FileNotFoundError:
+    pass
+except Exception as e:
+    print(f"WARNING: Could not read /etc/ground-station.conf: {e}", file=sys.stderr)
 # --- End Configuration ---
 
 # --- Logging Setup ---
@@ -43,7 +59,7 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO) # Set to logging.DEBUG for more verbose output
 
 # Add hostname context to logger
-adapter = logging.LoggerAdapter(logger, {'hostname': PI_HOSTNAME})
+adapter = logging.LoggerAdapter(logger, {'hostname': STATION_CALLSIGN})
 
 # Log to file if specified
 if LOG_FILE:
@@ -138,7 +154,7 @@ def main():
                         # --- Prepare JSON Data ---
                         payload = {
                             "timestamp": datetime.now(timezone.utc).isoformat(),
-                            "sender": PI_HOSTNAME,
+                            "sender": STATION_CALLSIGN,
                             "raw_data": line,
                         }
 

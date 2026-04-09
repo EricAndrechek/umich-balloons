@@ -206,7 +206,7 @@ const IRIDIUM_TS_RE = /^(\d{2})-(\d{2})-(\d{2})\s+(\d{2}:\d{2}:\d{2})$/;
 // Time-only: "15:04:05"
 const TIME_ONLY_RE = /^(\d{2}:\d{2}:\d{2})$/;
 
-function parseTimestamp(v: unknown): string | undefined {
+export function parseTimestamp(v: unknown): string | undefined {
   if (typeof v === "number") {
     // Unix timestamp
     return formatTime(new Date(v > 1e12 ? v : v * 1000));
@@ -238,6 +238,25 @@ function parseTimestamp(v: unknown): string | undefined {
   }
 
   return undefined;
+}
+
+// ---- t Field (HHMM) Parsing ----
+
+export function parseTField(t: number, referenceDate: Date): string | undefined {
+  const hours = Math.floor(t / 100);
+  const minutes = t % 100;
+  if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return undefined;
+
+  // Build datetime using reference date's year/month/day + parsed HH:MM:00
+  const d = new Date(referenceDate);
+  d.setUTCHours(hours, minutes, 0, 0);
+
+  // If the computed time is after the reference, it must be the previous day
+  if (d.getTime() > referenceDate.getTime()) {
+    d.setUTCDate(d.getUTCDate() - 1);
+  }
+
+  return formatTime(d);
 }
 
 // ---- Main Parser ----
@@ -304,7 +323,7 @@ function mapToTelemetry(data: Record<string, unknown>, sender: string, modulatio
     const ts = parseTimestamp(tsRaw);
     if (ts) t.datetime = ts;
   }
-  if (!t.datetime) t.datetime = now();
+  // Leave datetime empty if no timestamp found — handlers will set fallback
 
   // Speed → vel_h
   const speedRaw = resolveAlias(data, FIELD_ALIASES.speed);

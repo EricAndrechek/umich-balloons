@@ -5,6 +5,7 @@ import {
   handleAPRSRaw,
   handleLoRa,
   handleIridium,
+  handleStation,
 } from "./handlers";
 
 const MAX_BODY = 4096;
@@ -41,6 +42,8 @@ export default {
           return await handleLoRa(request, env);
         case "/iridium":
           return await handleIridium(request, env);
+        case "/station":
+          return await handleStation(request, env);
         default:
           return new Response("not found", { status: 404 });
       }
