@@ -259,7 +259,6 @@ fi
 # partition and careful testing. For now, swap is disabled and tmpfs is
 # used for /tmp to reduce SD card writes.
 mkdir -p /data/logs
-mount -t tmpfs -o size=64M,nosuid,nodev tmpfs /tmp 2>/dev/null || true
 if ! grep -q "tmpfs /tmp" /etc/fstab 2>/dev/null; then
     echo "tmpfs /tmp tmpfs defaults,nosuid,nodev,size=64M 0 0" >> /etc/fstab
 fi
