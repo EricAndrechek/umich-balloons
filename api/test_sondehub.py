@@ -297,7 +297,7 @@ def send_iridium_relay(relay_url: str, imei: str, callsign: str,
     Matches real RockBLOCK payload format:
       {"call":"KF8ABL-11","lat":422949,"lon":-837107,"alt":3,"dir":238,"spd":0,"v":46,"t":1937}
     Where lat/lon are *10000, alt is in hectometers (m/100), v is voltage*10,
-    t is HHMM UTC (e.g. 1937 = 19:37).
+    t is HHMM with firmware's buggy local-time hour (minutes are correct).
     """
     inner_payload = json.dumps({
         "call": callsign,
@@ -492,8 +492,15 @@ def main():
             print(f"  Waiting {secs_until:.0f}s for :00...")
         gen_ts = wait_until_second(0)
 
-        # t field: HHMM UTC at the moment of packet generation
-        t_hhmm = gen_ts.hour * 100 + gen_ts.minute
+        # t field: simulate the real firmware's buggy time encoding.
+        # The Arduino converts UTC hour to a broken "local" hour:
+        #   hour > 5 ? hour - 4 : hour + 8
+        # This produces hour values 2..19.  Minutes are always correct.
+        # Our backend's resolvePayloadDatetime ignores the hour and only
+        # uses the minutes, so the resolved datetime should still be correct.
+        utc_hour = gen_ts.hour
+        firmware_hour = (utc_hour - 4) if utc_hour > 5 else (utc_hour + 8)
+        t_hhmm = firmware_hour * 100 + gen_ts.minute
 
         now_str = gen_ts.strftime("%H:%M:%S")
         print(f"[{now_str}] Tick {tick_offset + 1}/{args.ticks}  "

@@ -240,23 +240,46 @@ export function parseTimestamp(v: unknown): string | undefined {
   return undefined;
 }
 
-// ---- t Field (HHMM) Parsing ----
+// ---- t Field (HHMM) Resolution ----
 
-export function parseTField(t: number, referenceDate: Date): string | undefined {
-  const hours = Math.floor(t / 100);
-  const minutes = t % 100;
-  if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return undefined;
-
-  // Build datetime using reference date's year/month/day + parsed HH:MM:00
-  const d = new Date(referenceDate);
-  d.setUTCHours(hours, minutes, 0, 0);
-
-  // If the computed time is after the reference, it must be the previous day
-  if (d.getTime() > referenceDate.getTime()) {
-    d.setUTCDate(d.getUTCDate() - 1);
+/**
+ * Resolve the balloon's datetime from a t-field (HHMM) and a sender's UTC timestamp.
+ *
+ * The hour in the t-field is unreliable (firmware encodes a broken local
+ * time), but the minutes are always correct.  We take the minutes from `t`
+ * and the date+hour from the sender's UTC timestamp.  If that puts the
+ * result after the sender's time, we subtract one hour — the balloon
+ * always transmits before the sender receives, so this handles the
+ * minute-rollover edge case (e.g. balloon sent at XX:59, sender received
+ * at XX+1:01).
+ *
+ * If no t-field is provided, returns the sender's time as-is.
+ */
+export function resolvePayloadDatetime(
+  t: number | undefined,
+  senderDate: Date,
+): string {
+  if (t === undefined) {
+    return formatTime(senderDate);
   }
 
-  return formatTime(d);
+  const minutes = t % 100;
+  if (minutes < 0 || minutes > 59) {
+    return formatTime(senderDate);
+  }
+
+  // Use sender's date+hour, but replace minutes with the t-field's minutes
+  const result = new Date(senderDate);
+  result.setUTCMinutes(minutes, 0, 0);
+
+  // The balloon always transmits before the sender receives, so the
+  // resolved time must be ≤ the sender's time.  If swapping in the
+  // t-field minutes puts us in the future, roll back one hour.
+  if (result.getTime() > senderDate.getTime()) {
+    result.setUTCHours(result.getUTCHours() - 1);
+  }
+
+  return formatTime(result);
 }
 
 // ---- Main Parser ----
