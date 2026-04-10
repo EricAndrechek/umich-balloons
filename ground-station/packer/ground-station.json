@@ -63,6 +63,8 @@
         "chmod +x /tmp/install.sh",
         "UMBGS_VERSION={{ user `umbgs_version` }} /tmp/install.sh",
         "mkdir -p /usr/share/plymouth/themes/pix && cp /tmp/splash.png /usr/share/plymouth/themes/pix/splash.png",
+        "printf '[Plymouth Theme]\\nName=Pix\\nDescription=UMB Ground Station\\nModuleName=script\\n\\n[script]\\nImageDir=/usr/share/plymouth/themes/pix\\nScriptFile=/usr/share/plymouth/themes/pix/pix.script\\n' > /usr/share/plymouth/themes/pix/pix.plymouth",
+        "printf 'wallpaper_image = Image(\"splash.png\");\\nscreen_width = Window.GetWidth();\\nscreen_height = Window.GetHeight();\\nresized_wallpaper_image = wallpaper_image.Scale(screen_width, screen_height);\\nwallpaper_sprite = Sprite(resized_wallpaper_image);\\nwallpaper_sprite.SetZ(-100);\\n' > /usr/share/plymouth/themes/pix/pix.script",
         "plymouth-set-default-theme -R pix",
         "rm /tmp/install.sh /tmp/watchdog.sh /tmp/splash.png"
       ]
