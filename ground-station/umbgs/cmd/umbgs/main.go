@@ -68,7 +68,12 @@ func main() {
 		logger.Error("failed to load config", "error", err)
 		os.Exit(1)
 	}
-	logger.Info("config loaded", "path", cfgPath, "callsign", cfg.UploaderCallsign())
+	configured := cfg.Configured()
+	if configured {
+		logger.Info("config loaded", "path", cfgPath, "callsign", cfg.UploaderCallsign())
+	} else {
+		logger.Warn("callsign not configured — starting in setup mode (dashboard + network only)")
+	}
 
 	// Set log level from config
 	switch cfg.LogLevel {
@@ -82,8 +87,8 @@ func main() {
 
 	cfgMgr := config.NewManager(cfg, cfgPath)
 
-	// Generate direwolf.conf
-	if cfg.APRS.Enabled {
+	// Generate direwolf.conf (only if configured)
+	if configured && cfg.APRS.Enabled {
 		if err := direwolf.GenerateConfig(cfgMgr, logger); err != nil {
 			logger.Warn("failed to generate direwolf.conf", "error", err)
 		}
@@ -152,15 +157,21 @@ func main() {
 	// Start all subsystems
 	run("led", ledCtrl.Run)
 	run("connectivity", connMon.Run)
-	run("gps", gpsReporter.Run)
 	run("system", sysStats.Run)
-	run("aprs", aprsListener.Run)
-	run("lora", loraReader.Run)
-	run("uploader", ul.Run)
 	run("dashboard", dashSrv.Run)
 	run("logs", logAgg.Run)
 	run("network", netMgr.Run)
 	run("updater", upd.Run)
+
+	// Radio subsystems only run if callsign is configured
+	if configured {
+		run("gps", gpsReporter.Run)
+		run("aprs", aprsListener.Run)
+		run("lora", loraReader.Run)
+		run("uploader", ul.Run)
+	} else {
+		logger.Warn("radio subsystems skipped — set callsign via dashboard at :8080 then reboot")
+	}
 
 	// Optional kiosk display (cage + cog)
 	if cfg.Display.Enabled {

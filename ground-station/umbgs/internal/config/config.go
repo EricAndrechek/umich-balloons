@@ -115,11 +115,14 @@ func (c *Config) UploaderCallsign() string {
 	return strings.ToUpper(c.Callsign)
 }
 
+// Configured returns true if the callsign has been set to a real value.
+func (c *Config) Configured() bool {
+	return c.Callsign != "" && c.Callsign != "CHANGE_ME"
+}
+
 // Validate checks the config for errors and returns a descriptive error if invalid.
+// An unconfigured callsign is allowed — the binary will start in setup mode.
 func (c *Config) Validate() error {
-	if c.Callsign == "" || c.Callsign == "CHANGE_ME" {
-		return fmt.Errorf("callsign must be set (currently %q)", c.Callsign)
-	}
 	if c.SSID < 0 || c.SSID > 15 {
 		return fmt.Errorf("ssid must be 0-15, got %d", c.SSID)
 	}

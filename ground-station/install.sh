@@ -130,8 +130,8 @@ log "Installing systemd units..."
 cat > "${SYSTEMD_DIR}/umbgs.service" << 'EOF'
 [Unit]
 Description=UMB Ground Station
-After=network-online.target gpsd.service
-Wants=network-online.target
+After=network.target gpsd.service
+Wants=network.target
 
 [Service]
 Type=simple
@@ -143,9 +143,6 @@ Environment=GOGC=50
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=umbgs
-NoNewPrivileges=yes
-ProtectSystem=strict
-ReadWritePaths=/data /boot/firmware
 ProtectHome=yes
 PrivateTmp=yes
 
