@@ -1,0 +1,13 @@
+[Unit]
+Description=UMB Ground Station First Boot
+After=network-pre.target
+Before=NetworkManager.service
+ConditionPathExists=!/data/.firstboot-done
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/umbgs-firstboot.sh
+
+[Install]
+WantedBy=multi-user.target

@@ -193,12 +193,19 @@ ground-station/
 ├── assets/                  # Splash screen images
 ├── ground-station.yaml      # Default config template
 ├── install.sh               # Standalone Pi installer
+├── firstboot.sh             # First-boot setup (rfkill, hostname)
 ├── watchdog.sh              # A/B rollback watchdog
-├── systemd/                 # Service unit files
+├── config/                  # Config files copied by install.sh
 │   ├── umbgs.service
+│   ├── direwolf.service
 │   ├── umbgs-watchdog.service
 │   ├── umbgs-watchdog.timer
-│   └── direwolf.service
+│   ├── umbgs-firstboot.service
+│   ├── getty-autologin.conf
+│   ├── networkmanager.conf
+│   ├── chrony-gps.conf
+│   ├── pix.plymouth
+│   └── pix.script
 ├── packer/
 │   └── ground-station.json      # Packer ARM image config
 └── umbgs/                   # Go source

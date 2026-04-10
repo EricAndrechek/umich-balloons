@@ -181,13 +181,22 @@ func main() {
 		}
 		run("display", func(ctx context.Context) error {
 			logger.Info("starting kiosk display", "url", displayURL)
+
+			// cage needs a runtime dir for the Wayland socket
+			runtimeDir := "/tmp/umbgs-display"
+			if err := os.MkdirAll(runtimeDir, 0700); err != nil {
+				return fmt.Errorf("create runtime dir: %w", err)
+			}
+
 			for {
 				cmd := exec.CommandContext(ctx, "cage", "--", "cog", displayURL)
 				cmd.Stdout = os.Stdout
 				cmd.Stderr = os.Stderr
 				cmd.Env = append(os.Environ(),
 					"WLR_LIBINPUT_NO_DEVICES=1",
-					"XDG_RUNTIME_DIR=/run/user/0",
+					"XDG_RUNTIME_DIR="+runtimeDir,
+					"LIBSEAT_BACKEND=builtin",
+					"HOME=/tmp",
 				)
 				if err := cmd.Run(); err != nil {
 					if ctx.Err() != nil {

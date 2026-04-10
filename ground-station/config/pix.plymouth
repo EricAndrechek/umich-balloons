@@ -1,0 +1,8 @@
+[Plymouth Theme]
+Name=Pix
+Description=UMB Ground Station
+ModuleName=script
+
+[script]
+ImageDir=/usr/share/plymouth/themes/pix
+ScriptFile=/usr/share/plymouth/themes/pix/pix.script

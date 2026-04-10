@@ -16,6 +16,7 @@ const (
 	nmSettingsBus   = "org.freedesktop.NetworkManager"
 	nmSettingsPath  = "/org/freedesktop/NetworkManager/Settings"
 	nmSettingsIface = "org.freedesktop.NetworkManager.Settings"
+	nmConnIface     = "org.freedesktop.NetworkManager.Settings.Connection"
 )
 
 // Manager syncs WiFi networks from config to NetworkManager and manages AP mode.
@@ -82,10 +83,35 @@ func (m *Manager) syncWiFi() error {
 	return nil
 }
 
+// findConnectionByID looks up an existing NM connection by its "id" field.
+func (m *Manager) findConnectionByID(conn *dbus.Conn, id string) (dbus.ObjectPath, bool) {
+	obj := conn.Object(nmSettingsBus, dbus.ObjectPath(nmSettingsPath))
+	var paths []dbus.ObjectPath
+	if err := obj.Call(nmSettingsIface+".ListConnections", 0).Store(&paths); err != nil {
+		return "", false
+	}
+	for _, p := range paths {
+		cObj := conn.Object(nmSettingsBus, p)
+		var settings map[string]map[string]dbus.Variant
+		if err := cObj.Call(nmConnIface+".GetSettings", 0).Store(&settings); err != nil {
+			continue
+		}
+		if connSec, ok := settings["connection"]; ok {
+			if idV, ok := connSec["id"]; ok {
+				if idV.Value().(string) == id {
+					return p, true
+				}
+			}
+		}
+	}
+	return "", false
+}
+
 func (m *Manager) addOrUpdateConnection(conn *dbus.Conn, ssid, psk string) error {
+	connID := "umbgs-" + ssid
 	settings := map[string]map[string]dbus.Variant{
 		"connection": {
-			"id":          dbus.MakeVariant("umbgs-" + ssid),
+			"id":          dbus.MakeVariant(connID),
 			"type":        dbus.MakeVariant("802-11-wireless"),
 			"autoconnect": dbus.MakeVariant(true),
 		},
@@ -105,11 +131,20 @@ func (m *Manager) addOrUpdateConnection(conn *dbus.Conn, ssid, psk string) error
 		},
 	}
 
+	if existing, ok := m.findConnectionByID(conn, connID); ok {
+		cObj := conn.Object(nmSettingsBus, existing)
+		call := cObj.Call(nmConnIface+".Update", 0, settings)
+		if call.Err != nil {
+			return fmt.Errorf("update connection: %w", call.Err)
+		}
+		m.logger.Debug("updated existing connection", "id", connID)
+		return nil
+	}
+
 	obj := conn.Object(nmSettingsBus, dbus.ObjectPath(nmSettingsPath))
 	call := obj.Call(nmSettingsIface+".AddConnection", 0, settings)
 	if call.Err != nil {
-		// Connection may already exist, which is fine
-		m.logger.Debug("connection add returned error (may already exist)", "error", call.Err)
+		return fmt.Errorf("add connection: %w", call.Err)
 	}
 	return nil
 }
@@ -123,6 +158,7 @@ func (m *Manager) ensureAPConnection() error {
 	}
 
 	apSSID := "UMB-" + callsign
+	connID := "umbgs-hotspot"
 
 	conn, err := dbus.SystemBus()
 	if err != nil {
@@ -132,7 +168,7 @@ func (m *Manager) ensureAPConnection() error {
 
 	settings := map[string]map[string]dbus.Variant{
 		"connection": {
-			"id":          dbus.MakeVariant("umbgs-hotspot"),
+			"id":          dbus.MakeVariant(connID),
 			"type":        dbus.MakeVariant("802-11-wireless"),
 			"autoconnect": dbus.MakeVariant(false),
 		},
@@ -149,12 +185,21 @@ func (m *Manager) ensureAPConnection() error {
 		},
 	}
 
+	if existing, ok := m.findConnectionByID(conn, connID); ok {
+		cObj := conn.Object(nmSettingsBus, existing)
+		call := cObj.Call(nmConnIface+".Update", 0, settings)
+		if call.Err != nil {
+			return fmt.Errorf("update hotspot: %w", call.Err)
+		}
+		m.logger.Debug("updated existing hotspot connection", "ssid", apSSID)
+		return nil
+	}
+
 	obj := conn.Object(nmSettingsBus, dbus.ObjectPath(nmSettingsPath))
 	call := obj.Call(nmSettingsIface+".AddConnection", 0, settings)
 	if call.Err != nil {
-		m.logger.Debug("hotspot connection add returned error (may exist)", "error", call.Err)
-	} else {
-		m.logger.Info("AP hotspot connection created", "ssid", apSSID)
+		return fmt.Errorf("add hotspot: %w", call.Err)
 	}
+	m.logger.Info("AP hotspot connection created", "ssid", apSSID)
 	return nil
 }

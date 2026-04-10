@@ -1,7 +1,7 @@
 [Unit]
 Description=UMB Ground Station
-After=network-online.target gpsd.service
-Wants=network-online.target
+After=network.target gpsd.service
+Wants=network.target
 
 [Service]
 Type=simple
@@ -13,11 +13,6 @@ Environment=GOGC=50
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=umbgs
-
-# Security hardening
-NoNewPrivileges=yes
-ProtectSystem=strict
-ReadWritePaths=/data
 ProtectHome=yes
 PrivateTmp=yes
 

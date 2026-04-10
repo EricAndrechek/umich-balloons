@@ -43,63 +43,15 @@
   "provisioners": [
     {
       "type": "file",
-      "source": "ground-station/install.sh",
-      "destination": "/tmp/install.sh"
-    },
-    {
-      "type": "file",
-      "source": "ground-station/watchdog.sh",
-      "destination": "/tmp/watchdog.sh"
-    },
-    {
-      "type": "file",
-      "source": "ground-station/assets/splash.png",
-      "destination": "/tmp/splash.png"
+      "source": "ground-station",
+      "destination": "/tmp/"
     },
     {
       "type": "shell",
       "inline": [
-        "cp /tmp/watchdog.sh /usr/local/bin/umbgs-watchdog.sh",
-        "chmod +x /tmp/install.sh",
-        "UMBGS_VERSION={{ user `umbgs_version` }} /tmp/install.sh",
-        "mkdir -p /usr/share/plymouth/themes/pix && cp /tmp/splash.png /usr/share/plymouth/themes/pix/splash.png",
-        "printf '[Plymouth Theme]\\nName=Pix\\nDescription=UMB Ground Station\\nModuleName=script\\n\\n[script]\\nImageDir=/usr/share/plymouth/themes/pix\\nScriptFile=/usr/share/plymouth/themes/pix/pix.script\\n' > /usr/share/plymouth/themes/pix/pix.plymouth",
-        "printf 'wallpaper_image = Image(\"splash.png\");\\nscreen_width = Window.GetWidth();\\nscreen_height = Window.GetHeight();\\nresized_wallpaper_image = wallpaper_image.Scale(screen_width, screen_height);\\nwallpaper_sprite = Sprite(resized_wallpaper_image);\\nwallpaper_sprite.SetZ(-100);\\n' > /usr/share/plymouth/themes/pix/pix.script",
-        "plymouth-set-default-theme -R pix",
-        "rm /tmp/install.sh /tmp/watchdog.sh /tmp/splash.png"
-      ]
-    },
-    {
-      "type": "shell",
-      "inline": [
-        "echo 'dtoverlay=disable-bt' >> /boot/firmware/config.txt",
-        "echo 'dtparam=audio=on' >> /boot/firmware/config.txt",
-        "echo 'disable_splash=1' >> /boot/firmware/config.txt",
-
-        "# Add 'splash' and suppress kernel logo/cursor for clean Plymouth boot",
-        "sed -i 's/$/ splash logo.nologo vt.global_cursor_default=0/' /boot/firmware/cmdline.txt",
-
-        "# --- Pre-create 'umbgs' user so Pi OS skips first-boot wizard ---",
-        "groupadd -f gpio; groupadd -f spi; groupadd -f i2c",
-        "useradd -m -G sudo,video,dialout,gpio,spi,i2c,plugdev -s /bin/bash umbgs",
-        "echo 'umbgs:umbgs' | chpasswd",
-
-        "# Write userconf.txt so Pi OS knows a user exists and skips the wizard",
-        "HASH=$(echo 'umbgs' | openssl passwd -6 -stdin)",
-        "echo \"umbgs:${HASH}\" > /boot/firmware/userconf.txt",
-
-        "# Disable the first-boot user-creation wizard service",
-        "systemctl disable userconfig 2>/dev/null || true",
-        "rm -f /etc/systemd/system/multi-user.target.wants/userconfig.service",
-
-        "# Enable and configure auto-login on tty1 (the touchscreen console)",
-        "systemctl enable getty@tty1.service",
-        "mkdir -p /etc/systemd/system/getty@tty1.service.d",
-        "printf '[Service]\\nExecStart=\\nExecStart=-/sbin/agetty --autologin umbgs --noclear %%I $TERM\\n' > /etc/systemd/system/getty@tty1.service.d/autologin.conf",
-
-        "# Enable SSH for remote debugging",
-        "systemctl enable ssh",
-        "touch /boot/firmware/ssh"
+        "chmod +x /tmp/ground-station/install.sh",
+        "UMBGS_VERSION={{ user `umbgs_version` }} /tmp/ground-station/install.sh",
+        "rm -rf /tmp/ground-station"
       ]
     }
   ],

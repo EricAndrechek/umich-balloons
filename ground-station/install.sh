@@ -1,22 +1,59 @@
 #!/bin/bash
 # install.sh - UMB Ground Station installer
-# Works standalone or as part of Packer image build.
+# Works standalone on a Pi OR inside a Packer QEMU chroot.
+# All config files live in ground-station/config/ and are copied into place.
 # Usage: curl -fsSL https://raw.githubusercontent.com/EricAndrechek/umich-balloons/refs/heads/main/ground-station/install.sh | sudo bash
 set -euo pipefail
 
 UMBGS_VERSION="${UMBGS_VERSION:-latest}"
 GITHUB_REPO="EricAndrechek/umich-balloons"
+GITHUB_RAW="https://raw.githubusercontent.com/${GITHUB_REPO}/main/ground-station"
 DATA_DIR="/data"
 SYSTEMD_DIR="/etc/systemd/system"
 
 log() { echo "[umbgs-install] $*"; }
 err() { echo "[umbgs-install] ERROR: $*" >&2; exit 1; }
 
-# Must be root
 [ "$(id -u)" -eq 0 ] || err "Must run as root"
+
+# Detect chroot (Packer QEMU) vs real hardware
+IN_CHROOT=false
+if ischroot 2>/dev/null; then
+    IN_CHROOT=true
+elif [ "$(stat -c %d:%i / 2>/dev/null)" != "$(stat -c %d:%i /proc/1/root/. 2>/dev/null)" ] 2>/dev/null; then
+    IN_CHROOT=true
+fi
+
+# Resolve directories for sibling files
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd 2>/dev/null || echo /tmp)"
+
+# Find config files: local repo checkout > /tmp (Packer upload) > download from GitHub
+config_file() {
+    local name="$1" dest="$2"
+    if [ -f "${SCRIPT_DIR}/config/${name}" ]; then
+        cp "${SCRIPT_DIR}/config/${name}" "$dest"
+    elif [ -f "/tmp/config/${name}" ]; then
+        cp "/tmp/config/${name}" "$dest"
+    else
+        curl -fsSL -o "$dest" "${GITHUB_RAW}/config/${name}"
+    fi
+}
+
+# Same pattern for non-config sibling files
+fetch_file() {
+    local name="$1" dest="$2"
+    if [ -f "${SCRIPT_DIR}/${name}" ]; then
+        cp "${SCRIPT_DIR}/${name}" "$dest"
+    elif [ -f "/tmp/${name}" ]; then
+        cp "/tmp/${name}" "$dest"
+    else
+        curl -fsSL -o "$dest" "${GITHUB_RAW}/${name}"
+    fi
+}
 
 log "=== UMB Ground Station Installer ==="
 log "Version: $UMBGS_VERSION"
+log "Environment: $(if $IN_CHROOT; then echo 'chroot/QEMU'; else echo 'real hardware'; fi)"
 
 # ─── System packages ───────────────────────────────────────────────
 log "Installing system dependencies..."
@@ -80,162 +117,42 @@ log "Binary installed to ${DATA_DIR}/umbgs-a"
 # ─── Default config ──────────────────────────────────────────────
 if [ ! -f /boot/firmware/ground-station.yaml ]; then
     log "Creating default config on boot partition..."
-    cat > /boot/firmware/ground-station.yaml << 'YAML'
-# UMB Ground Station Configuration
-# Edit this file and reboot, or use the web dashboard.
-
-callsign: "CHANGE_ME"
-ssid: 9
-api_url: "https://api.umich-balloons.com"
-
-wifi:
-  networks:
-    - ssid: ""
-      psk: ""
-
-aprs:
-  enabled: true
-  kiss_host: "127.0.0.1"
-  kiss_port: 8001
-  frequency: 144.390
-  gain: 42
-
-lora:
-  enabled: true
-  baud: 9600
-
-gps:
-  enabled: true
-  report_interval: 60
-
-dashboard:
-  enabled: true
-  port: 8080
-
-display:
-  enabled: false
-  url: "http://localhost:8080"
-
-update:
-  enabled: true
-  channel: "stable"
-
-log_level: "info"
-YAML
+    fetch_file "ground-station.yaml" /boot/firmware/ground-station.yaml
 fi
 
 # ─── Systemd units ────────────────────────────────────────────────
 log "Installing systemd units..."
+config_file "umbgs.service"            "${SYSTEMD_DIR}/umbgs.service"
+config_file "direwolf.service"         "${SYSTEMD_DIR}/direwolf.service"
+config_file "umbgs-watchdog.service"   "${SYSTEMD_DIR}/umbgs-watchdog.service"
+config_file "umbgs-watchdog.timer"     "${SYSTEMD_DIR}/umbgs-watchdog.timer"
+config_file "umbgs-firstboot.service"  "${SYSTEMD_DIR}/umbgs-firstboot.service"
 
-# Copy service files (use heredocs for standalone install)
-cat > "${SYSTEMD_DIR}/umbgs.service" << 'EOF'
-[Unit]
-Description=UMB Ground Station
-After=network.target gpsd.service
-Wants=network.target
-
-[Service]
-Type=simple
-ExecStart=/data/umbgs
-Restart=always
-RestartSec=5
-WatchdogSec=120
-Environment=GOGC=50
-StandardOutput=journal
-StandardError=journal
-SyslogIdentifier=umbgs
-ProtectHome=yes
-PrivateTmp=yes
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-cat > "${SYSTEMD_DIR}/direwolf.service" << 'EOF'
-[Unit]
-Description=Direwolf APRS TNC
-After=sound.target
-
-[Service]
-Type=simple
-ExecStart=/usr/bin/direwolf -t 0
-Restart=always
-RestartSec=10
-StandardOutput=journal
-StandardError=journal
-SyslogIdentifier=direwolf
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-cat > "${SYSTEMD_DIR}/umbgs-watchdog.service" << 'EOF'
-[Unit]
-Description=UMB Ground Station Watchdog
-After=umbgs.service
-
-[Service]
-Type=oneshot
-ExecStart=/usr/local/bin/umbgs-watchdog.sh
-EOF
-
-cat > "${SYSTEMD_DIR}/umbgs-watchdog.timer" << 'EOF'
-[Unit]
-Description=UMB Ground Station Watchdog Timer
-
-[Timer]
-OnBootSec=5min
-OnUnitActiveSec=5min
-AccuracySec=30s
-
-[Install]
-WantedBy=timers.target
-EOF
-
-# Install watchdog script
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [ -f "${SCRIPT_DIR}/watchdog.sh" ]; then
-    cp "${SCRIPT_DIR}/watchdog.sh" /usr/local/bin/umbgs-watchdog.sh
-else
-    # Download watchdog if not available locally
-    curl -fsSL -o /usr/local/bin/umbgs-watchdog.sh \
-        "https://raw.githubusercontent.com/${GITHUB_REPO}/main/ground-station/watchdog.sh"
-fi
+# Watchdog + firstboot scripts
+fetch_file "watchdog.sh" /usr/local/bin/umbgs-watchdog.sh
 chmod +x /usr/local/bin/umbgs-watchdog.sh
+fetch_file "firstboot.sh" /usr/local/bin/umbgs-firstboot.sh
+chmod +x /usr/local/bin/umbgs-firstboot.sh
 
 # ─── Enable services ─────────────────────────────────────────────
 log "Enabling services..."
 systemctl daemon-reload
-systemctl enable gpsd
-systemctl enable direwolf
-systemctl enable umbgs
-systemctl enable umbgs-watchdog.timer
+systemctl enable gpsd direwolf umbgs umbgs-watchdog.timer umbgs-firstboot.service
 
 # ─── Chrony GPS config ───────────────────────────────────────────
 if ! grep -q "SHM 0" /etc/chrony/chrony.conf 2>/dev/null; then
     log "Configuring chrony for GPS time..."
-    cat >> /etc/chrony/chrony.conf << 'EOF'
-
-# GPS via gpsd shared memory
-refclock SHM 0 offset 0.5 delay 0.2 refid NMEA noselect
-refclock SHM 1 offset 0.0 delay 0.01 refid PPS prefer
-EOF
+    echo "" >> /etc/chrony/chrony.conf
+    CHRONY_TMP=$(mktemp)
+    config_file "chrony-gps.conf" "$CHRONY_TMP"
+    cat "$CHRONY_TMP" >> /etc/chrony/chrony.conf
+    rm -f "$CHRONY_TMP"
     systemctl restart chrony 2>/dev/null || true
 fi
 
 # ─── NetworkManager config ────────────────────────────────────────
 log "Configuring NetworkManager..."
-cat > /etc/NetworkManager/conf.d/umbgs.conf << 'EOF'
-[main]
-plugins=keyfile
-
-[connection]
-wifi.powersave=2
-
-[connectivity]
-uri=http://nmcheck.gnome.org/check_network_status.txt
-interval=60
-EOF
+config_file "networkmanager.conf" /etc/NetworkManager/conf.d/umbgs.conf
 
 # ─── System hardening ─────────────────────────────────────────────
 log "Applying system hardening..."
@@ -244,25 +161,75 @@ log "Applying system hardening..."
 systemctl disable --now dphys-swapfile 2>/dev/null || true
 swapoff -a 2>/dev/null || true
 
-# Set hostname pattern
-CURRENT_HOSTNAME=$(hostname)
-if [ "$CURRENT_HOSTNAME" = "raspberrypi" ] || [ "$CURRENT_HOSTNAME" = "localhost" ]; then
-    hostnamectl set-hostname "umb-ground-station"
-fi
-
-# ─── Read-only root (optional, requires separate /data partition) ──
-# Pi OS has built-in overlayfs support. To enable it later on a running Pi:
-#   sudo raspi-config nonint enable_overlayfs
-# This is NOT enabled automatically because it requires a separate /data
-# partition and careful testing. For now, swap is disabled and tmpfs is
-# used for /tmp to reduce SD card writes.
 mkdir -p /data/logs
 if ! grep -q "tmpfs /tmp" /etc/fstab 2>/dev/null; then
     echo "tmpfs /tmp tmpfs defaults,nosuid,nodev,size=64M 0 0" >> /etc/fstab
 fi
 
+# ─── User setup ───────────────────────────────────────────────────
+if ! id umbgs &>/dev/null; then
+    log "Creating umbgs user..."
+    groupadd -f gpio; groupadd -f spi; groupadd -f i2c
+    useradd -m -G sudo,video,dialout,gpio,spi,i2c,plugdev -s /bin/bash umbgs
+    echo 'umbgs:umbgs' | chpasswd
+fi
+
+# Tell Pi OS a user exists (skips first-boot wizard)
+if [ -d /boot/firmware ]; then
+    HASH=$(echo 'umbgs' | openssl passwd -6 -stdin)
+    echo "umbgs:${HASH}" > /boot/firmware/userconf.txt
+fi
+
+# Disable Pi OS first-boot user-creation wizard
+systemctl disable userconfig 2>/dev/null || true
+rm -f /etc/systemd/system/multi-user.target.wants/userconfig.service
+
+# Auto-login on tty1 (touchscreen console)
+systemctl enable getty@tty1.service
+mkdir -p /etc/systemd/system/getty@tty1.service.d
+config_file "getty-autologin.conf" /etc/systemd/system/getty@tty1.service.d/autologin.conf
+
+# ─── SSH ──────────────────────────────────────────────────────────
+log "Enabling SSH..."
+systemctl enable ssh
+[ -d /boot/firmware ] && touch /boot/firmware/ssh
+
+# ─── WiFi regulatory domain ──────────────────────────────────────
+log "Setting WiFi regulatory domain..."
+echo 'REGDOMAIN=US' > /etc/default/crda
+
+# ─── Boot firmware config ────────────────────────────────────────
+if [ -d /boot/firmware ]; then
+    log "Configuring boot firmware..."
+
+    for param in "dtoverlay=disable-bt" "dtparam=audio=on" "disable_splash=1" "auto_initramfs=1"; do
+        grep -qxF "$param" /boot/firmware/config.txt 2>/dev/null || echo "$param" >> /boot/firmware/config.txt
+    done
+
+    if ! grep -q "cfg80211.ieee80211_regdom" /boot/firmware/cmdline.txt 2>/dev/null; then
+        sed -i '/^console=/ s/$/ splash logo.nologo vt.global_cursor_default=0 cfg80211.ieee80211_regdom=US/' /boot/firmware/cmdline.txt
+    fi
+fi
+
+# ─── Plymouth splash screen ──────────────────────────────────────
+log "Setting up Plymouth splash..."
+mkdir -p /usr/share/plymouth/themes/pix
+fetch_file "assets/splash.png" /usr/share/plymouth/themes/pix/splash.png
+config_file "pix.plymouth"     /usr/share/plymouth/themes/pix/pix.plymouth
+config_file "pix.script"       /usr/share/plymouth/themes/pix/pix.script
+plymouth-set-default-theme -R pix
+
+# ─── Done ─────────────────────────────────────────────────────────
 log "=== Installation complete ==="
-log "Next steps:"
-log "  1. Edit /boot/firmware/ground-station.yaml with your callsign and WiFi"
-log "  2. Reboot: sudo reboot"
-log "  3. Dashboard will be at http://<ip>:8080"
+
+if ! $IN_CHROOT; then
+    log "Running on real hardware — executing first-boot setup now..."
+    /usr/local/bin/umbgs-firstboot.sh || true
+    log ""
+    log "Ground station installed. Next steps:"
+    log "  1. Edit /boot/firmware/ground-station.yaml with your callsign and WiFi"
+    log "  2. Reboot: sudo reboot"
+    log "  3. Dashboard will be at http://<ip>:8080"
+else
+    log "Packer/chroot build complete. First-boot setup will run on initial boot."
+fi
