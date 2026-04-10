@@ -268,9 +268,11 @@ export function resolvePayloadDatetime(
     return formatTime(senderDate);
   }
 
-  // Use sender's date+hour, but replace minutes with the t-field's minutes
+  // Use sender's date+hour, but replace minutes with the t-field's minutes.
+  // Keep the sender's seconds — the t-field only has minute precision, so
+  // the sender's receive-second is the best approximation we have.
   const result = new Date(senderDate);
-  result.setUTCMinutes(minutes, 0, 0);
+  result.setUTCMinutes(minutes);
 
   // The balloon always transmits before the sender receives, so the
   // resolved time must be ≤ the sender's time.  If swapping in the
