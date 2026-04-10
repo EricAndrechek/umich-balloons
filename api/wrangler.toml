@@ -3,6 +3,9 @@ main = "src/index.ts"
 compatibility_date = "2026-04-05"
 workers_dev = false
 
+[build]
+command = "printf 'export const COMMIT_SHA = \"%s\";\\n' \"${WORKERS_CI_COMMIT_SHA:-dev}\" > src/version.ts"
+
 [[routes]]
 pattern = "api.umich-balloons.com"
 custom_domain = true

@@ -47,16 +47,16 @@ export async function uploadToSondehub(
   softwareName: string,
   softwareVersion: string,
 ): Promise<{ status: number; body: string }> {
-  telem.software_name = softwareName;
-  telem.software_version = softwareVersion;
-  if (!telem.time_received) {
-    telem.time_received = now();
-  }
-  if (!telem.datetime) {
-    telem.datetime = telem.time_received;
-  }
+  // Build a new object to avoid mutating the caller's telem
+  const upload: Telemetry = {
+    ...telem,
+    software_name: softwareName,
+    software_version: softwareVersion,
+    time_received: telem.time_received || now(),
+    datetime: telem.datetime || telem.time_received || now(),
+  };
 
-  const payload = JSON.stringify([telem]);
+  const payload = JSON.stringify([upload]);
   console.log(`SondeHub payload: ${payload}`);
   const compressed = await gzipEncode(new TextEncoder().encode(payload));
 
@@ -65,28 +65,8 @@ export async function uploadToSondehub(
 }
 
 async function gzipEncode(data: Uint8Array): Promise<Uint8Array> {
-  const cs = new CompressionStream("gzip");
-  const writer = cs.writable.getWriter();
-  writer.write(data);
-  writer.close();
-
-  const chunks: Uint8Array[] = [];
-  const reader = cs.readable.getReader();
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    chunks.push(value);
-  }
-
-  let totalLen = 0;
-  for (const c of chunks) totalLen += c.length;
-  const result = new Uint8Array(totalLen);
-  let offset = 0;
-  for (const c of chunks) {
-    result.set(c, offset);
-    offset += c.length;
-  }
-  return result;
+  const stream = new Response(data).body!.pipeThrough(new CompressionStream("gzip"));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
 }
 
 async function fetchWithRetry(
@@ -94,7 +74,7 @@ async function fetchWithRetry(
   body: Uint8Array,
   softwareName: string,
   softwareVersion: string,
-  maxRetries = 2,
+  maxRetries = 5,
 ): Promise<{ status: number; body: string }> {
   let lastErr: string | undefined;
 
@@ -116,9 +96,6 @@ async function fetchWithRetry(
 
     const text = await resp.text();
 
-    if (resp.status === 200) {
-      return { status: 200, body: text };
-    }
     if (resp.status >= 200 && resp.status < 300) {
       return { status: resp.status, body: text };
     }

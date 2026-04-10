@@ -196,11 +196,6 @@ export function validateCallsign(callsign: string): string {
 
 // ---- Timestamp Parsing ----
 
-const TIMESTAMP_FORMATS = [
-  // ISO variants tried via Date.parse
-  undefined, // sentinel for Date.parse attempt
-];
-
 // Iridium format: "06-01-02 15:04:05" → "2006-01-02 15:04:05"
 const IRIDIUM_TS_RE = /^(\d{2})-(\d{2})-(\d{2})\s+(\d{2}:\d{2}:\d{2})$/;
 // Time-only: "15:04:05"
@@ -243,41 +238,45 @@ export function parseTimestamp(v: unknown): string | undefined {
 // ---- t Field (HHMM) Resolution ----
 
 /**
- * Resolve the balloon's datetime from a t-field (HHMM) and a sender's UTC timestamp.
+ * Resolve the balloon's datetime from a t-field (HHMM) and the receiver's UTC timestamp.
+ *
+ * Chain: balloon (t=HHMM, minutes only) → receiver (full UTC with seconds) → API → SondeHub.
  *
  * The hour in the t-field is unreliable (firmware encodes a broken local
  * time), but the minutes are always correct.  We take the minutes from `t`
- * and the date+hour from the sender's UTC timestamp.  If that puts the
- * result after the sender's time, we subtract one hour — the balloon
- * always transmits before the sender receives, so this handles the
- * minute-rollover edge case (e.g. balloon sent at XX:59, sender received
- * at XX+1:01).
+ * and the date+hour+seconds from the receiver's UTC timestamp.  Seconds
+ * come from the receiver because the t-field only has minute precision.
  *
- * If no t-field is provided, returns the sender's time as-is.
+ * If the resolved time is after the receiver's time, we subtract one
+ * hour — the balloon always transmits before the receiver gets it,
+ * so this handles the minute-rollover edge case (e.g. balloon sent at
+ * XX:59, receiver got it at XX+1:01).
+ *
+ * If no t-field is provided, returns the receiver's time as-is.
  */
 export function resolvePayloadDatetime(
   t: number | undefined,
-  senderDate: Date,
+  receiverDate: Date,
 ): string {
   if (t === undefined) {
-    return formatTime(senderDate);
+    return formatTime(receiverDate);
   }
 
   const minutes = t % 100;
   if (minutes < 0 || minutes > 59) {
-    return formatTime(senderDate);
+    return formatTime(receiverDate);
   }
 
-  // Use sender's date+hour, but replace minutes with the t-field's minutes.
-  // Keep the sender's seconds — the t-field only has minute precision, so
-  // the sender's receive-second is the best approximation we have.
-  const result = new Date(senderDate);
+  // Use receiver's date+hour, but replace minutes with the t-field's minutes.
+  // Keep the receiver's seconds — the t-field only has minute precision, so
+  // the receiver's receive-second is the best approximation we have.
+  const result = new Date(receiverDate);
   result.setUTCMinutes(minutes);
 
-  // The balloon always transmits before the sender receives, so the
-  // resolved time must be ≤ the sender's time.  If swapping in the
+  // The balloon always transmits before the receiver gets it, so the
+  // resolved time must be ≤ the receiver's time.  If swapping in the
   // t-field minutes puts us in the future, roll back one hour.
-  if (result.getTime() > senderDate.getTime()) {
+  if (result.getTime() > receiverDate.getTime()) {
     result.setUTCHours(result.getUTCHours() - 1);
   }
 

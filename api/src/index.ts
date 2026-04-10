@@ -2,7 +2,6 @@ import {
   type Env,
   handleHealth,
   handleAPRS,
-  handleAPRSRaw,
   handleLoRa,
   handleIridium,
   handleStation,
@@ -28,16 +27,17 @@ export default {
 
     // Guard body size
     const contentLength = request.headers.get("content-length");
-    if (contentLength && parseInt(contentLength) > MAX_BODY) {
-      return new Response("request body too large", { status: 413 });
+    if (contentLength) {
+      const len = parseInt(contentLength, 10);
+      if (isNaN(len) || len > MAX_BODY) {
+        return new Response("request body too large or invalid", { status: 413 });
+      }
     }
 
     try {
       switch (path) {
         case "/aprs":
           return await handleAPRS(request, env);
-        case "/aprs/raw":
-          return await handleAPRSRaw(request, env);
         case "/lora":
           return await handleLoRa(request, env);
         case "/iridium":

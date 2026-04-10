@@ -2,21 +2,17 @@ import { type Telemetry, uploadToSondehub, type ListenerPosition, uploadListener
 import { parseLoRaJSON, parseTimestamp, resolvePayloadDatetime } from "./normalize";
 import { parseAPRS } from "./aprs";
 import { verifyIridiumJWT } from "./jwt";
-import { decodeBody } from "./msgpack";
+import { decodeBody } from "./decode";
+import { COMMIT_SHA } from "./version";
 
 export interface Env {
   SONDEHUB_API_URL: string;
   SOFTWARE_NAME: string;
   DEV_MODE: string;
-  WORKERS_CI_COMMIT_SHA?: string;
 }
 
 function isDevMode(env: Env): boolean {
   return env.DEV_MODE === "true";
-}
-
-function commitSha(env: Env): string {
-  return env.WORKERS_CI_COMMIT_SHA || "dev";
 }
 
 function jsonResponse(body: Record<string, unknown>, status = 200): Response {
@@ -27,10 +23,14 @@ function jsonResponse(body: Record<string, unknown>, status = 200): Response {
 }
 
 async function forwardToSondehub(telem: Telemetry, env: Env): Promise<Response> {
-  const result = await uploadToSondehub(telem, env.SONDEHUB_API_URL, env.SOFTWARE_NAME, commitSha(env));
-  if (result.status >= 200 && result.status < 300) {
-    console.log(`SondeHub upload successful: callsign=${telem.payload_callsign}, sondehub_status=${result.status}, sondehub_body=${result.body}`);
+  const result = await uploadToSondehub(telem, env.SONDEHUB_API_URL, env.SOFTWARE_NAME, COMMIT_SHA);
+  if (result.status === 200) {
+    console.log(`SondeHub upload ok: callsign=${telem.payload_callsign}`);
     return jsonResponse({ status: "accepted" }, 202);
+  }
+  if (result.status > 200 && result.status < 300) {
+    console.warn(`SondeHub upload accepted with issues (${result.status}): ${result.body}`);
+    return jsonResponse({ status: "accepted", warning: result.body }, 202);
   }
   console.error(`SondeHub upload failed ${result.status}: ${result.body}`);
   return jsonResponse({ status: "upstream_error", detail: result.body }, 502);
@@ -43,7 +43,13 @@ export function handleHealth(): Response {
 
 // POST /aprs — JSON body with raw_data field
 export async function handleAPRS(request: Request, env: Env): Promise<Response> {
-  const body = (await decodeBody(request)) as { sender?: string; raw_data?: string; timestamp?: string };
+  let body: { sender?: string; raw_data?: string; timestamp?: string };
+  try {
+    body = (await decodeBody(request)) as typeof body;
+  } catch {
+    return jsonResponse({ error: "invalid request body" }, 400);
+  }
+
   if (!body.raw_data) {
     return jsonResponse({ error: "missing raw_data" }, 400);
   }
@@ -68,65 +74,45 @@ export async function handleAPRS(request: Request, env: Env): Promise<Response> 
   return forwardToSondehub(telem, env);
 }
 
-// POST /aprs/raw — plain text body (raw APRS packet)
-export async function handleAPRSRaw(request: Request, env: Env): Promise<Response> {
-  const raw = await request.text();
-  if (!raw.length) {
-    return jsonResponse({ error: "empty body" }, 400);
-  }
-
-  const sender = request.headers.get("CF-Connecting-IP") || "unknown";
-
-  let telem: Telemetry;
-  try {
-    telem = parseAPRS(raw, sender);
-  } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e);
-    console.warn(`APRS raw parse error: ${msg}`);
-    return jsonResponse({ error: msg }, 400);
-  }
-
-  return forwardToSondehub(telem, env);
-}
-
 // ---- Shared relay telemetry processing (LoRa + Iridium) ----
 
 /**
- * Parse raw payload data and resolve timestamps using the sender's time.
- * Both LoRa and Iridium payloads use the same compact JSON format.
+ * Parse raw payload data and resolve timestamps.
+ * Chain: balloon (t=HHMM, no seconds) → receiver (ground station or Iridium,
+ * full UTC datetime) → this API worker → SondeHub.
  *
  * @param rawData  - The parsed JSON payload (object or JSON string)
- * @param sender   - Uploader callsign (ground station or "iridium-{imei}")
- * @param senderTimestamp - UTC time from the sender (ground station rx time or Iridium transmit_time)
+ * @param receiver - Uploader callsign (ground station or "iridium-{imei}")
+ * @param receiverTimestamp - UTC time from the receiver (ground station rx time or Iridium transmit_time)
  * @param modulation - "LoRa" or "Iridium"
  */
 function processRelayTelemetry(
   rawData: unknown,
-  sender: string,
-  senderTimestamp: string | undefined,
+  receiver: string,
+  receiverTimestamp: string | undefined,
   modulation: string,
 ): Telemetry {
-  const telem = parseLoRaJSON(rawData, sender);
+  const telem = parseLoRaJSON(rawData, receiver);
   telem.modulation = modulation;
 
-  // Use the sender's timestamp as time_received (not our wall clock)
-  let senderDate: Date | undefined;
-  if (senderTimestamp) {
-    const parsed = parseTimestamp(senderTimestamp);
+  // Use the receiver's timestamp as time_received (not our wall clock)
+  let receiverDate: Date | undefined;
+  if (receiverTimestamp) {
+    const parsed = parseTimestamp(receiverTimestamp);
     if (parsed) {
-      senderDate = new Date(parsed);
+      receiverDate = new Date(parsed);
       telem.time_received = parsed;
     }
   }
 
-  // Resolve datetime: use t-field (HHMM) corrected to UTC if present,
-  // fall back to any timestamp the payload already parsed, then sender time.
-  if (senderDate) {
+  // Resolve datetime: minutes come from the balloon's t-field (HHMM),
+  // seconds come from the receiver's timestamp (best approximation).
+  if (receiverDate) {
     const tField = typeof telem.t === "number" ? telem.t : undefined;
     if (tField !== undefined || !telem.datetime) {
-      telem.datetime = resolvePayloadDatetime(tField, senderDate);
+      telem.datetime = resolvePayloadDatetime(tField, receiverDate);
     }
-    console.log(`Relay datetime resolved: t=${tField}, sender=${senderDate.toISOString()}, datetime=${telem.datetime}`);
+    console.log(`Relay datetime resolved: t=${tField}, receiver=${receiverDate.toISOString()}, datetime=${telem.datetime}`);
   }
   if ("t" in telem) delete telem.t;
 
@@ -140,7 +126,12 @@ function processRelayTelemetry(
 
 // POST /lora — JSON with raw_data (object or JSON string)
 export async function handleLoRa(request: Request, env: Env): Promise<Response> {
-  const body = (await decodeBody(request)) as { sender?: string; raw_data?: unknown; timestamp?: string };
+  let body: { sender?: string; raw_data?: unknown; timestamp?: string };
+  try {
+    body = (await decodeBody(request)) as typeof body;
+  } catch {
+    return jsonResponse({ error: "invalid request body" }, 400);
+  }
   if (body.raw_data === undefined || body.raw_data === null) {
     return jsonResponse({ error: "missing raw_data" }, 400);
   }
@@ -183,8 +174,21 @@ interface IridiumPayload {
   JWT: string;
 }
 
+const IRIDIUM_REQUIRED_FIELDS = ["imei", "serial", "momsn", "transmit_time", "iridium_latitude", "iridium_longitude", "iridium_cep", "data"] as const;
+
 export async function handleIridium(request: Request, env: Env): Promise<Response> {
-  const req = (await request.json()) as IridiumPayload;
+  let req: IridiumPayload;
+  try {
+    req = (await decodeBody(request)) as IridiumPayload;
+  } catch {
+    return jsonResponse({ error: "invalid request body" }, 400);
+  }
+
+  // Validate required fields
+  const missing = IRIDIUM_REQUIRED_FIELDS.filter((f) => req[f] === undefined || req[f] === null);
+  if (missing.length > 0) {
+    return jsonResponse({ error: `missing required fields: ${missing.join(", ")}` }, 400);
+  }
 
   // Verify JWT (skip in dev mode)
   if (isDevMode(env)) {
@@ -217,7 +221,7 @@ export async function handleIridium(request: Request, env: Env): Promise<Respons
 
   const sender = "iridium-" + req.imei;
 
-  // Use Iridium network's transmit_time as the sender timestamp
+  // Use Iridium network's transmit_time as the receiver timestamp
   let telem: Telemetry;
   try {
     telem = processRelayTelemetry(payload, sender, req.transmit_time, "Iridium");
@@ -240,11 +244,10 @@ export async function handleIridium(request: Request, env: Env): Promise<Respons
 
 function hexDecode(hex: string): Uint8Array {
   if (hex.length % 2 !== 0) throw new Error("odd-length hex string");
+  if (!/^[0-9a-fA-F]*$/.test(hex)) throw new Error("invalid hex characters");
   const bytes = new Uint8Array(hex.length / 2);
   for (let i = 0; i < hex.length; i += 2) {
-    const byte = parseInt(hex.slice(i, i + 2), 16);
-    if (isNaN(byte)) throw new Error(`invalid hex at position ${i}`);
-    bytes[i / 2] = byte;
+    bytes[i / 2] = parseInt(hex.slice(i, i + 2), 16);
   }
   return bytes;
 }
@@ -260,7 +263,12 @@ interface StationPayload {
 }
 
 export async function handleStation(request: Request, env: Env): Promise<Response> {
-  const body = (await request.json()) as StationPayload;
+  let body: StationPayload;
+  try {
+    body = (await decodeBody(request)) as StationPayload;
+  } catch {
+    return jsonResponse({ error: "invalid request body" }, 400);
+  }
 
   if (!body.callsign || typeof body.lat !== "number" || typeof body.lon !== "number" || typeof body.alt !== "number") {
     return jsonResponse({ error: "missing required fields: callsign, lat, lon, alt" }, 400);
@@ -272,7 +280,7 @@ export async function handleStation(request: Request, env: Env): Promise<Respons
 
   const position: ListenerPosition = {
     software_name: env.SOFTWARE_NAME,
-    software_version: commitSha(env),
+    software_version: COMMIT_SHA,
     uploader_callsign: body.callsign,
     uploader_position: [body.lat, body.lon, body.alt],
     mobile: true,
