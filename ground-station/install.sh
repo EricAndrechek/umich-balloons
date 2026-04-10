@@ -26,7 +26,7 @@ apt-get install -y -qq \
     gpsd gpsd-tools \
     chrony \
     network-manager \
-    plymouth \
+    plymouth plymouth-themes \
     cage \
     cog \
     jq \
