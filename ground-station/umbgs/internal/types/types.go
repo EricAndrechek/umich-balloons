@@ -5,12 +5,12 @@ import "time"
 
 // Packet represents a telemetry packet received from any source.
 type Packet struct {
-	Source   string                 // "aprs" or "lora"
-	RawData  string                 // Original raw data string
-	Parsed   map[string]interface{} // Parsed JSON fields (LoRa), nil for APRS
-	Endpoint string                 // API endpoint to upload to ("/aprs" or "/lora")
-	Sender   string                 // Uploader callsign (e.g., "KD8CJT-9")
-	Time     time.Time              // When the packet was received locally
+	Source   string                 `json:"source"`             // "aprs" or "lora"
+	RawData  string                 `json:"raw_data"`           // Original raw data string
+	Parsed   map[string]interface{} `json:"parsed,omitempty"`   // Parsed JSON fields (LoRa), nil for APRS
+	Endpoint string                 `json:"endpoint"`           // API endpoint to upload to ("/aprs" or "/lora")
+	Sender   string                 `json:"sender"`             // Uploader callsign (e.g., "KD8CJT-9")
+	Time     time.Time              `json:"time"`               // When the packet was received locally
 }
 
 // Position represents a GPS fix from gpsd.
@@ -32,19 +32,19 @@ const (
 
 // PacketEvent is emitted by the uploader for the dashboard.
 type PacketEvent struct {
-	Packet    Packet
-	Status    PacketStatus
-	Error     string
-	Timestamp time.Time
+	Packet    Packet       `json:"packet"`
+	Status    PacketStatus `json:"status"`
+	Error     string       `json:"error,omitempty"`
+	Timestamp time.Time    `json:"timestamp"`
 }
 
 // LogEntry represents a structured log line for the dashboard.
 type LogEntry struct {
-	Timestamp time.Time
-	Service   string // "umbgs", "direwolf", "gpsd", "system"
-	Level     string // "DEBUG", "INFO", "WARN", "ERROR"
-	Message   string
-	Fields    map[string]string
+	Timestamp time.Time         `json:"timestamp"`
+	Service   string            `json:"service"` // "umbgs", "direwolf", "gpsd", "system"
+	Level     string            `json:"level"`   // "DEBUG", "INFO", "WARN", "ERROR"
+	Message   string            `json:"message"`
+	Fields    map[string]string `json:"fields,omitempty"`
 }
 
 // SystemStats holds system metrics for the dashboard.

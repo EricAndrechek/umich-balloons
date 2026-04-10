@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -87,12 +88,8 @@ func main() {
 
 	cfgMgr := config.NewManager(cfg, cfgPath)
 
-	// Generate direwolf.conf (only if configured)
-	if configured && cfg.APRS.Enabled {
-		if err := direwolf.GenerateConfig(cfgMgr, logger); err != nil {
-			logger.Warn("failed to generate direwolf.conf", "error", err)
-		}
-	}
+	// Direwolf runner (replaces standalone direwolf.service)
+	dwRunner := direwolf.NewRunner(cfgMgr, logger)
 
 	// Open buffer database
 	buf, err := buffer.Open(logger)
@@ -163,8 +160,17 @@ func main() {
 	run("network", netMgr.Run)
 	run("updater", upd.Run)
 
+	// Unblock WiFi radio on every boot (not just first boot)
+	if err := exec.CommandContext(ctx, "rfkill", "unblock", "wifi").Run(); err != nil {
+		logger.Debug("rfkill unblock wifi", "error", err)
+	}
+	if err := exec.CommandContext(ctx, "nmcli", "radio", "wifi", "on").Run(); err != nil {
+		logger.Debug("nmcli radio wifi on", "error", err)
+	}
+
 	// Radio subsystems only run if callsign is configured
 	if configured {
+		run("direwolf", dwRunner.Run)
 		run("gps", gpsReporter.Run)
 		run("aprs", aprsListener.Run)
 		run("lora", loraReader.Run)
@@ -213,7 +219,7 @@ func main() {
 		})
 	}
 
-	// Stats update goroutine - bridges subsystem state to system stats
+	// Stats update goroutine - bridges subsystem state to system stats + sd_notify watchdog
 	run("stats-bridge", func(ctx context.Context) error {
 		ticker := time.NewTicker(3 * time.Second)
 		defer ticker.Stop()
@@ -222,6 +228,7 @@ func main() {
 			case <-ctx.Done():
 				return ctx.Err()
 			case <-ticker.C:
+				sdNotify("WATCHDOG=1")
 				sysStats.SetExternal(func(st *types.SystemStats) {
 					st.Online = connMon.Online()
 					st.BufferDepth = buf.Depth()
@@ -315,6 +322,20 @@ func openLogFile(path string) (*os.File, error) {
 		os.Rename(path, path+".1")
 	}
 	return os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+}
+
+// sdNotify sends a message to the systemd notify socket (if available).
+func sdNotify(state string) {
+	sock := os.Getenv("NOTIFY_SOCKET")
+	if sock == "" {
+		return
+	}
+	conn, err := net.Dial("unixgram", sock)
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+	conn.Write([]byte(state))
 }
 
 // writeDebugSnapshot copies recent logs to the FAT32 boot partition for easy retrieval.

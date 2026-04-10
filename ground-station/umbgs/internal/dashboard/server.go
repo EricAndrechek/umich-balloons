@@ -124,6 +124,13 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		// Preserve real WiFi PSKs when the dashboard sends back masked values
+		existing := s.cfg.Get()
+		for i, net := range newCfg.WiFi.Networks {
+			if net.PSK == "********" && i < len(existing.WiFi.Networks) {
+				newCfg.WiFi.Networks[i].PSK = existing.WiFi.Networks[i].PSK
+			}
+		}
 		restarts, err := s.cfg.Update(&newCfg)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)

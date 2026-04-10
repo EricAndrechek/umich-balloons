@@ -1,0 +1,14 @@
+[Unit]
+Description=Enable WiFi Radio
+Before=NetworkManager.service
+After=systemd-udevd.service
+DefaultDependencies=no
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/rfkill unblock wifi
+ExecStart=/usr/bin/nmcli radio wifi on
+
+[Install]
+WantedBy=multi-user.target

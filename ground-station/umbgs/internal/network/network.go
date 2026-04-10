@@ -68,7 +68,7 @@ func (m *Manager) syncWiFi() error {
 	if err != nil {
 		return fmt.Errorf("D-Bus: %w", err)
 	}
-	defer conn.Close()
+	// Do NOT close shared system bus — it's a process-wide singleton.
 
 	for _, net := range c.WiFi.Networks {
 		if net.SSID == "" || net.PSK == "" {
@@ -164,7 +164,7 @@ func (m *Manager) ensureAPConnection() error {
 	if err != nil {
 		return fmt.Errorf("D-Bus: %w", err)
 	}
-	defer conn.Close()
+	// Do NOT close shared system bus.
 
 	settings := map[string]map[string]dbus.Variant{
 		"connection": {

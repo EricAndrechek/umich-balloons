@@ -126,7 +126,27 @@ func (r *Reader) readLoop(ctx context.Context, c config.Config) error {
 	return fmt.Errorf("serial device closed")
 }
 
-// detectDevice scans /dev/serial/by-id/ for known USB serial adapters.
+// knownSerialIDs contains substrings to match against /dev/serial/by-id/ entries.
+// Matches vendor IDs, chip names, and common USB-serial adapter identifiers.
+var knownSerialIDs = []string{
+	"arduino",
+	"ch340", "ch341",
+	"1a86",  // QinHeng CH340/CH341 vendor ID
+	"ftdi",
+	"cp210",
+	"serial", // catches "USB2.0-Serial" and similar generic names
+}
+
+// excludeSerialIDs filters out devices that look like GPS receivers, not LoRa.
+var excludeSerialIDs = []string{
+	"garmin",
+	"091e", // Garmin vendor ID
+	"u-blox",
+	"gps",
+}
+
+// detectDevice scans /dev/serial/by-id/ for known USB serial adapters,
+// excluding GPS receivers and other non-LoRa devices.
 func detectDevice() (string, error) {
 	byID := "/dev/serial/by-id"
 	entries, err := os.ReadDir(byID)
@@ -134,13 +154,25 @@ func detectDevice() (string, error) {
 		return "", fmt.Errorf("cannot list %s: %w", byID, err)
 	}
 
-	knownChips := []string{"Arduino", "CH340", "FTDI", "USB-Serial", "CP210"}
 	for _, e := range entries {
-		name := e.Name()
-		for _, chip := range knownChips {
-			if strings.Contains(strings.ToLower(name), strings.ToLower(chip)) {
-				path := filepath.Join(byID, name)
-				// Resolve symlink to actual device
+		name := strings.ToLower(e.Name())
+
+		// Skip known non-LoRa devices (GPS, etc.)
+		excluded := false
+		for _, ex := range excludeSerialIDs {
+			if strings.Contains(name, ex) {
+				excluded = true
+				break
+			}
+		}
+		if excluded {
+			continue
+		}
+
+		// Check if it matches a known serial adapter
+		for _, id := range knownSerialIDs {
+			if strings.Contains(name, id) {
+				path := filepath.Join(byID, e.Name())
 				resolved, err := filepath.EvalSymlinks(path)
 				if err != nil {
 					return path, nil

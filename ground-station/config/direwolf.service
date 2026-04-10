@@ -1,15 +1,11 @@
+# NOTE: Direwolf is now managed by umbgs directly (rtl_fm | direwolf pipeline).
+# This service file is kept only as a stub for compatibility.
+# Do NOT enable this service — umbgs handles direwolf lifecycle.
+
 [Unit]
-Description=Direwolf APRS TNC
-After=sound.target
+Description=Direwolf APRS TNC (legacy stub — managed by umbgs)
 
 [Service]
-Type=simple
-ExecStart=/usr/bin/direwolf -t 0
-Restart=always
-RestartSec=10
-StandardOutput=journal
-StandardError=journal
-SyslogIdentifier=direwolf
-
-[Install]
-WantedBy=multi-user.target
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/true

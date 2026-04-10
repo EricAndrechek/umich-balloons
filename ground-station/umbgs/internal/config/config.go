@@ -13,61 +13,67 @@ import (
 
 // Config is the top-level ground station configuration.
 type Config struct {
-	Callsign string `yaml:"callsign"`
-	SSID     int    `yaml:"ssid"`
-	APIUrl   string `yaml:"api_url"`
+	Callsign string `yaml:"callsign" json:"callsign"`
+	SSID     int    `yaml:"ssid" json:"ssid"`
+	APIUrl   string `yaml:"api_url" json:"api_url"`
 
-	WiFi      WiFiConfig      `yaml:"wifi"`
-	APRS      APRSConfig      `yaml:"aprs"`
-	LoRa      LoRaConfig      `yaml:"lora"`
-	GPS       GPSConfig       `yaml:"gps"`
-	Dashboard DashboardConfig `yaml:"dashboard"`
-	Display   DisplayConfig   `yaml:"display"`
-	Update    UpdateConfig    `yaml:"update"`
-	LogLevel  string          `yaml:"log_level"`
+	WiFi      WiFiConfig      `yaml:"wifi" json:"wifi"`
+	APRS      APRSConfig      `yaml:"aprs" json:"aprs"`
+	LoRa      LoRaConfig      `yaml:"lora" json:"lora"`
+	GPS       GPSConfig       `yaml:"gps" json:"gps"`
+	Dashboard DashboardConfig `yaml:"dashboard" json:"dashboard"`
+	Display   DisplayConfig   `yaml:"display" json:"display"`
+	Update    UpdateConfig    `yaml:"update" json:"update"`
+	LogLevel  string          `yaml:"log_level" json:"log_level"`
 }
 
 type WiFiConfig struct {
-	Networks []WiFiNetwork `yaml:"networks"`
+	Networks []WiFiNetwork `yaml:"networks" json:"networks"`
 }
 
 type WiFiNetwork struct {
-	SSID string `yaml:"ssid"`
-	PSK  string `yaml:"psk"`
+	SSID string `yaml:"ssid" json:"ssid"`
+	PSK  string `yaml:"psk" json:"psk"`
 }
 
 type APRSConfig struct {
-	Enabled   bool    `yaml:"enabled"`
-	KISSHost  string  `yaml:"kiss_host"`
-	KISSPort  int     `yaml:"kiss_port"`
-	Frequency float64 `yaml:"frequency"`
-	Gain      int     `yaml:"gain"`
+	Enabled   bool    `yaml:"enabled" json:"enabled"`
+	KISSHost  string  `yaml:"kiss_host" json:"kiss_host"`
+	KISSPort  int     `yaml:"kiss_port" json:"kiss_port"`
+	Frequency float64 `yaml:"frequency" json:"frequency"`
+	Gain      int     `yaml:"gain" json:"gain"`
+	IGServer  string  `yaml:"igserver" json:"igserver"`
+	// Beacon settings for iGate position reporting
+	BeaconComment string  `yaml:"beacon_comment" json:"beacon_comment"`
+	BeaconLat     float64 `yaml:"beacon_lat" json:"beacon_lat"`
+	BeaconLon     float64 `yaml:"beacon_lon" json:"beacon_lon"`
+	BeaconAlt     int     `yaml:"beacon_alt" json:"beacon_alt"`
 }
 
 type LoRaConfig struct {
-	Enabled bool   `yaml:"enabled"`
-	Baud    int    `yaml:"baud"`
-	Device  string `yaml:"device"`
+	Enabled bool   `yaml:"enabled" json:"enabled"`
+	Baud    int    `yaml:"baud" json:"baud"`
+	Device  string `yaml:"device" json:"device"`
 }
 
 type GPSConfig struct {
-	Enabled        bool `yaml:"enabled"`
-	ReportInterval int  `yaml:"report_interval"`
+	Enabled        bool `yaml:"enabled" json:"enabled"`
+	ReportInterval int  `yaml:"report_interval" json:"report_interval"`
 }
 
 type DashboardConfig struct {
-	Enabled bool `yaml:"enabled"`
-	Port    int  `yaml:"port"`
+	Enabled bool `yaml:"enabled" json:"enabled"`
+	Port    int  `yaml:"port" json:"port"`
 }
 
 type DisplayConfig struct {
-	Enabled bool   `yaml:"enabled"`
-	URL     string `yaml:"url"`
+	Enabled bool   `yaml:"enabled" json:"enabled"`
+	URL     string `yaml:"url" json:"url"`
 }
 
 type UpdateConfig struct {
-	Enabled bool   `yaml:"enabled"`
-	Channel string `yaml:"channel"`
+	Enabled bool   `yaml:"enabled" json:"enabled"`
+	Channel string `yaml:"channel" json:"channel"`
 }
 
 // Defaults returns a Config with sensible defaults.
@@ -77,11 +83,16 @@ func Defaults() Config {
 		SSID:     9,
 		APIUrl:   "https://api.umich-balloons.com",
 		APRS: APRSConfig{
-			Enabled:   true,
-			KISSHost:  "127.0.0.1",
-			KISSPort:  8001,
-			Frequency: 144.390,
-			Gain:      42,
+			Enabled:       true,
+			KISSHost:      "127.0.0.1",
+			KISSPort:      8001,
+			Frequency:     144.390,
+			Gain:          0, // 0 = auto gain
+			IGServer:      "noam.aprs2.net",
+			BeaconComment: "UMich Balloons Ground Station",
+			BeaconLat:     42.2943757,
+			BeaconLon:     -83.7110013,
+			BeaconAlt:     271,
 		},
 		LoRa: LoRaConfig{
 			Enabled: true,

@@ -8,15 +8,22 @@ log() { echo "[umbgs-firstboot] $*"; }
 
 log "=== First boot setup ==="
 
-# ─── Unblock WiFi radio (hardware-agnostic, works on Pi 4 + Pi 5) ──
+# ─── Unblock WiFi radio (also done by umbgs on every boot, but belt-and-suspenders) ──
 log "Unblocking WiFi radio..."
 rfkill unblock wifi 2>/dev/null || true
+nmcli radio wifi on 2>/dev/null || true
 
 # ─── Set hostname ─────────────────────────────────────────────────
 CURRENT=$(hostname)
 if [ "$CURRENT" = "raspberrypi" ] || [ "$CURRENT" = "localhost" ]; then
     log "Setting hostname to umb-ground-station..."
     hostnamectl set-hostname umb-ground-station 2>/dev/null || true
+fi
+
+# ─── Rebuild initramfs (deferred from Packer chroot for Plymouth splash) ──
+if [ -f /usr/share/plymouth/themes/pix/splash.png ]; then
+    log "Rebuilding initramfs for Plymouth splash..."
+    update-initramfs -u 2>/dev/null || true
 fi
 
 # ─── Mark first boot complete ─────────────────────────────────────

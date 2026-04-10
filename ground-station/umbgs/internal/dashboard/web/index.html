@@ -127,6 +127,10 @@ body {
       </div>
     </div>
     <div class="card">
+      <h3>Network</h3>
+      <div id="s-net-list" style="font-size:.9em;"></div>
+    </div>
+    <div class="card">
       <h3>Buffer</h3>
       <div class="stat-grid">
         <div class="stat"><div class="val" id="s-buf">0</div><div class="label">Queued</div></div>
@@ -145,10 +149,48 @@ body {
   </div>
   <!-- Config -->
   <div id="config" class="page">
-    <div class="card" id="cfg-form">
-      <h3>Configuration</h3>
-      <p style="color:var(--muted);font-size:.85em;">Loading...</p>
+    <div class="card" id="cfg-general">
+      <h3>General</h3>
+      <div class="cfg-field"><label>Callsign</label><input type="text" id="cfg-callsign"></div>
+      <div class="cfg-field"><label>SSID (0-15)</label><input type="number" id="cfg-ssid" min="0" max="15"></div>
+      <div class="cfg-field"><label>API URL</label><input type="text" id="cfg-api_url"></div>
+      <div class="cfg-field"><label>Log Level</label>
+        <select id="cfg-log_level"><option>debug</option><option>info</option><option>warn</option><option>error</option></select>
+      </div>
     </div>
+    <div class="card" id="cfg-wifi-card">
+      <h3>WiFi Networks</h3>
+      <div id="cfg-wifi-list"></div>
+      <button class="btn" style="margin-top:8px;background:#555;" onclick="addWifiRow('','')">+ Add Network</button>
+    </div>
+    <div class="card">
+      <h3>APRS</h3>
+      <div class="cfg-field"><label><input type="checkbox" id="cfg-aprs-enabled"> Enabled</label></div>
+      <div class="cfg-field"><label>Frequency (MHz)</label><input type="number" id="cfg-aprs-freq" step="0.001"></div>
+      <div class="cfg-field"><label>RTL-SDR Gain (0=auto, 1-49)</label><input type="number" id="cfg-aprs-gain" min="0" max="49"></div>
+      <div class="cfg-field"><label>APRS-IS Server</label><input type="text" id="cfg-aprs-igserver"></div>
+    </div>
+    <div class="card">
+      <h3>LoRa</h3>
+      <div class="cfg-field"><label><input type="checkbox" id="cfg-lora-enabled"> Enabled</label></div>
+      <div class="cfg-field"><label>Baud Rate</label><input type="number" id="cfg-lora-baud"></div>
+      <div class="cfg-field"><label>Device (blank=auto)</label><input type="text" id="cfg-lora-device" placeholder="/dev/ttyUSB0"></div>
+    </div>
+    <div class="card">
+      <h3>GPS</h3>
+      <div class="cfg-field"><label><input type="checkbox" id="cfg-gps-enabled"> Enabled</label></div>
+      <div class="cfg-field"><label>Report Interval (sec)</label><input type="number" id="cfg-gps-interval" min="1"></div>
+    </div>
+    <div class="card">
+      <h3>Display</h3>
+      <div class="cfg-field"><label><input type="checkbox" id="cfg-display-enabled"> Kiosk Mode Enabled</label></div>
+      <div class="cfg-field"><label>URL (blank=dashboard)</label><input type="text" id="cfg-display-url" placeholder="http://localhost:8080"></div>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:8px;">
+      <button class="btn btn-primary" onclick="saveConfig()">Save Configuration</button>
+      <button class="btn btn-danger" onclick="if(confirm('Reboot the ground station?'))fetch('/api/update',{method:'POST'})">Check Update</button>
+    </div>
+    <p id="cfg-status" style="color:var(--muted);font-size:.85em;margin-top:8px;"></p>
   </div>
 </div>
 <script>
@@ -207,6 +249,21 @@ body {
     setText('s-lat', s.gps_fix ? s.gps_lat.toFixed(6) : '--');
     setText('s-lon', s.gps_fix ? s.gps_lon.toFixed(6) : '--');
     setText('s-alt', s.gps_fix ? s.gps_alt.toFixed(1) : '--');
+    // Network interfaces
+    const netList = document.getElementById('s-net-list');
+    if (s.network?.interfaces?.length) {
+      netList.innerHTML = s.network.interfaces.map(i => {
+        const icon = i.type === 'wifi' ? '&#x1F4F6;' : '&#x1F50C;';
+        const detail = i.state === 'connected'
+          ? (i.type === 'wifi'
+            ? '<span class="online">' + esc(i.ssid || '?') + '</span> ' + (i.signal||0) + '% — ' + (i.ip||'no IP')
+            : '<span class="online">Connected</span> — ' + (i.ip||'no IP'))
+          : '<span class="muted">Disconnected</span>';
+        return '<div style="padding:4px 0;border-bottom:1px solid #333;">' + icon + ' <b>' + esc(i.name) + '</b> (' + i.type + ') ' + detail + '</div>';
+      }).join('');
+    } else {
+      netList.innerHTML = '<span class="muted">No interfaces detected</span>';
+    }
   }
 
   function addPacket(evt) {
@@ -247,56 +304,117 @@ body {
     return h + 'h ' + m + 'm';
   }
 
-  // Load config
+  // WiFi row helpers (global so onclick works)
+  window.addWifiRow = function(ssid, psk) {
+    const list = document.getElementById('cfg-wifi-list');
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;gap:6px;margin-bottom:6px;align-items:center;';
+    row.innerHTML = '<input type="text" placeholder="SSID" value="' + esc(ssid) + '" style="flex:1;" class="wifi-ssid">' +
+      '<input type="password" placeholder="Password" value="' + esc(psk) + '" style="flex:1;" class="wifi-psk">' +
+      '<button class="btn" style="padding:6px 10px;background:#d9534f;color:#fff;min-width:36px;" onclick="this.parentElement.remove()">X</button>';
+    list.appendChild(row);
+  };
+
+  // Load config into form fields
   function loadConfig() {
     fetch('/api/config').then(r => r.json()).then(cfg => {
-      const form = document.getElementById('cfg-form');
-      form.innerHTML = '<h3>Configuration</h3>';
-      const fields = [
-        {key:'callsign',label:'Callsign',type:'text'},
-        {key:'ssid',label:'SSID (0-15)',type:'number'},
-        {key:'api_url',label:'API URL',type:'text'},
-        {key:'log_level',label:'Log Level',type:'text'},
-      ];
-      fields.forEach(f => {
-        const d = document.createElement('div');
-        d.className = 'cfg-field';
-        d.innerHTML = '<label>' + f.label + '</label><input type="' + f.type + '" id="cfg-' + f.key + '" value="' + esc(String(cfg[f.key]||'')) + '">';
-        form.appendChild(d);
-      });
-      const btn = document.createElement('button');
-      btn.className = 'btn btn-primary';
-      btn.textContent = 'Save';
-      btn.onclick = saveConfig;
-      form.appendChild(btn);
-    }).catch(() => {});
+      // General
+      document.getElementById('cfg-callsign').value = cfg.callsign || '';
+      document.getElementById('cfg-ssid').value = cfg.ssid || 0;
+      document.getElementById('cfg-api_url').value = cfg.api_url || '';
+      document.getElementById('cfg-log_level').value = cfg.log_level || 'info';
+      // WiFi
+      const wifiList = document.getElementById('cfg-wifi-list');
+      wifiList.innerHTML = '';
+      (cfg.wifi?.networks || []).forEach(n => addWifiRow(n.ssid || '', n.psk || ''));
+      // APRS
+      document.getElementById('cfg-aprs-enabled').checked = cfg.aprs?.enabled ?? true;
+      document.getElementById('cfg-aprs-freq').value = cfg.aprs?.frequency || 144.390;
+      document.getElementById('cfg-aprs-gain').value = cfg.aprs?.gain ?? 42;
+      document.getElementById('cfg-aprs-igserver').value = cfg.aprs?.igserver || 'noam.aprs2.net';
+      // LoRa
+      document.getElementById('cfg-lora-enabled').checked = cfg.lora?.enabled ?? true;
+      document.getElementById('cfg-lora-baud').value = cfg.lora?.baud || 9600;
+      document.getElementById('cfg-lora-device').value = cfg.lora?.device || '';
+      // GPS
+      document.getElementById('cfg-gps-enabled').checked = cfg.gps?.enabled ?? true;
+      document.getElementById('cfg-gps-interval').value = cfg.gps?.report_interval || 60;
+      // Display
+      document.getElementById('cfg-display-enabled').checked = cfg.display?.enabled ?? false;
+      document.getElementById('cfg-display-url').value = cfg.display?.url || '';
+      // Callsign for overview
+      let cs = (cfg.callsign||'').toUpperCase();
+      if(cfg.ssid>0) cs += '-'+cfg.ssid;
+      setText('s-callsign', cs||'--');
+    }).catch(e => {
+      document.getElementById('cfg-status').textContent = 'Failed to load config: ' + e;
+    });
   }
 
-  function saveConfig() {
-    fetch('/api/config').then(r => r.json()).then(cfg => {
-      cfg.callsign = document.getElementById('cfg-callsign').value;
-      cfg.ssid = parseInt(document.getElementById('cfg-ssid').value) || 0;
-      cfg.api_url = document.getElementById('cfg-api_url').value;
-      cfg.log_level = document.getElementById('cfg-log_level').value;
-      return fetch('/api/config', {
-        method: 'PUT',
-        headers: {'Content-Type':'application/json'},
-        body: JSON.stringify(cfg)
-      });
+  window.saveConfig = function() {
+    // Collect WiFi networks from dynamic rows
+    const wifiNets = [];
+    document.querySelectorAll('#cfg-wifi-list > div').forEach(row => {
+      const ssid = row.querySelector('.wifi-ssid').value.trim();
+      const psk = row.querySelector('.wifi-psk').value;
+      if (ssid) wifiNets.push({ssid: ssid, psk: psk});
+    });
+
+    const cfg = {
+      callsign: document.getElementById('cfg-callsign').value.trim(),
+      ssid: parseInt(document.getElementById('cfg-ssid').value) || 0,
+      api_url: document.getElementById('cfg-api_url').value.trim(),
+      log_level: document.getElementById('cfg-log_level').value,
+      wifi: { networks: wifiNets },
+      aprs: {
+        enabled: document.getElementById('cfg-aprs-enabled').checked,
+        kiss_host: '127.0.0.1',
+        kiss_port: 8001,
+        frequency: parseFloat(document.getElementById('cfg-aprs-freq').value) || 144.390,
+        gain: parseInt(document.getElementById('cfg-aprs-gain').value) || 0,
+        igserver: document.getElementById('cfg-aprs-igserver').value.trim(),
+      },
+      lora: {
+        enabled: document.getElementById('cfg-lora-enabled').checked,
+        baud: parseInt(document.getElementById('cfg-lora-baud').value) || 9600,
+        device: document.getElementById('cfg-lora-device').value.trim(),
+      },
+      gps: {
+        enabled: document.getElementById('cfg-gps-enabled').checked,
+        report_interval: parseInt(document.getElementById('cfg-gps-interval').value) || 60,
+      },
+      dashboard: { enabled: true, port: 8080 },
+      display: {
+        enabled: document.getElementById('cfg-display-enabled').checked,
+        url: document.getElementById('cfg-display-url').value.trim(),
+      },
+      update: { enabled: true, channel: 'stable' },
+    };
+
+    const status = document.getElementById('cfg-status');
+    status.textContent = 'Saving...';
+    fetch('/api/config', {
+      method: 'PUT',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(cfg)
     }).then(r => r.json()).then(res => {
-      if (res.ok) alert('Config saved.' + (res.restart_needed?.length ? ' Restart needed: ' + res.restart_needed.join(', ') : ''));
-    }).catch(e => alert('Error: ' + e));
-  }
+      if (res.ok) {
+        status.textContent = 'Config saved.' + (res.restart_needed?.length ? ' Restart needed: ' + res.restart_needed.join(', ') : '');
+        status.style.color = 'var(--green)';
+      } else {
+        status.textContent = 'Error: ' + (res.error || 'unknown');
+        status.style.color = 'var(--red)';
+      }
+      setTimeout(() => { status.style.color = 'var(--muted)'; }, 5000);
+    }).catch(e => {
+      status.textContent = 'Error: ' + e;
+      status.style.color = 'var(--red)';
+    });
+  };
 
   // Init
   connect();
   loadConfig();
-  // Fetch callsign for overview
-  fetch('/api/config').then(r=>r.json()).then(c=>{
-    let cs = (c.callsign||'').toUpperCase();
-    if(c.ssid>0) cs += '-'+c.ssid;
-    setText('s-callsign', cs||'--');
-  }).catch(()=>{});
 })();
 </script>
 </body>

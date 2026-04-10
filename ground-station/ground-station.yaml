@@ -28,7 +28,13 @@ aprs:
   kiss_host: "127.0.0.1"
   kiss_port: 8001
   frequency: 144.390   # MHz (North America standard)
-  gain: 42             # RTL-SDR gain (0-49, or 0 for auto)
+  gain: 0              # RTL-SDR gain (0=auto, 1-49 manual)
+  igserver: "noam.aprs2.net"  # APRS-IS server (passcode auto-calculated from callsign)
+  # iGate beacon settings (position reported to APRS-IS)
+  beacon_comment: "UMich Balloons Ground Station"
+  beacon_lat: 42.2943757
+  beacon_lon: -83.7110013
+  beacon_alt: 271
 
 # LoRa via USB serial (Arduino/ESP32)
 lora:

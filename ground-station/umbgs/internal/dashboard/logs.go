@@ -3,6 +3,7 @@ package dashboard
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"log/slog"
 	"os/exec"
 	"strings"
@@ -41,7 +42,7 @@ func (la *LogAggregator) Run(ctx context.Context) error {
 }
 
 func (la *LogAggregator) stream(ctx context.Context, units []string) error {
-	args := []string{"--follow", "--no-pager", "--output=short-iso", "--lines=0"}
+	args := []string{"--follow", "--no-pager", "--output=json", "--lines=50"}
 	for _, u := range units {
 		args = append(args, "-u", u)
 	}
@@ -57,49 +58,62 @@ func (la *LogAggregator) stream(ctx context.Context, units []string) error {
 	}
 
 	scanner := bufio.NewScanner(stdout)
+	scanner.Buffer(make([]byte, 0, 8192), 8192)
 	for scanner.Scan() {
-		line := scanner.Text()
-		entry := parseLine(line)
+		entry := parseJournalJSON(scanner.Bytes())
 		la.hub.BroadcastLog(entry)
 	}
 
 	return cmd.Wait()
 }
 
-func parseLine(line string) types.LogEntry {
+// journalEntry is the subset of journalctl JSON fields we care about.
+type journalEntry struct {
+	SyslogIdentifier string `json:"SYSLOG_IDENTIFIER"`
+	Message          string `json:"MESSAGE"`
+	Priority         string `json:"PRIORITY"`
+}
+
+func parseJournalJSON(data []byte) types.LogEntry {
 	entry := types.LogEntry{
 		Timestamp: time.Now().UTC(),
 		Service:   "system",
 		Level:     "INFO",
-		Message:   line,
 	}
 
-	// Try to extract service from systemd format: "date host service[pid]: message"
-	parts := strings.SplitN(line, ": ", 2)
-	if len(parts) == 2 {
-		entry.Message = parts[1]
-		header := parts[0]
-
-		// Extract service name from "date host service[pid]"
-		fields := strings.Fields(header)
-		if len(fields) >= 3 {
-			svc := fields[len(fields)-1]
-			if idx := strings.Index(svc, "["); idx > 0 {
-				svc = svc[:idx]
-			}
-			entry.Service = svc
-		}
+	var je journalEntry
+	if err := json.Unmarshal(data, &je); err != nil {
+		// Fallback: treat as plain text
+		entry.Message = string(data)
+		return entry
 	}
 
-	// Detect log level from message content
-	upper := strings.ToUpper(entry.Message)
-	switch {
-	case strings.Contains(upper, "ERROR") || strings.Contains(upper, "ERR"):
+	entry.Service = je.SyslogIdentifier
+	if entry.Service == "" {
+		entry.Service = "system"
+	}
+	entry.Message = je.Message
+
+	// Map systemd priority (0=emerg..7=debug) to our levels
+	switch je.Priority {
+	case "0", "1", "2", "3": // emerg, alert, crit, err
 		entry.Level = "ERROR"
-	case strings.Contains(upper, "WARN"):
+	case "4": // warning
 		entry.Level = "WARN"
-	case strings.Contains(upper, "DEBUG"):
+	case "7": // debug
 		entry.Level = "DEBUG"
+	default: // 5=notice, 6=info
+		entry.Level = "INFO"
+	}
+
+	// Also detect level from message content (for structured JSON logs from umbgs)
+	upper := strings.ToUpper(entry.Message)
+	if strings.Contains(upper, "\"LEVEL\":\"ERROR\"") || strings.Contains(upper, "\"LEVEL\":\"WARN\"") {
+		if strings.Contains(upper, "ERROR") {
+			entry.Level = "ERROR"
+		} else if strings.Contains(upper, "WARN") {
+			entry.Level = "WARN"
+		}
 	}
 
 	return entry

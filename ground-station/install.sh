@@ -95,20 +95,32 @@ fi
 log "Setting up data directory..."
 mkdir -p "$DATA_DIR"
 
-# ─── Download binary ──────────────────────────────────────────────
-log "Downloading umbgs binary..."
-ARCH=$(dpkg --print-architecture)
-if [ "$ARCH" = "arm64" ] || [ "$ARCH" = "aarch64" ]; then
-    ARCH="arm64"
-fi
-
-if [ "$UMBGS_VERSION" = "latest" ]; then
-    DOWNLOAD_URL="https://github.com/${GITHUB_REPO}/releases/latest/download/umbgs-linux-${ARCH}"
+# ─── Install binary ──────────────────────────────────────────────
+# UMBGS_BINARY env var allows using a pre-built local binary (for Packer builds).
+if [ -n "${UMBGS_BINARY:-}" ] && [ -f "$UMBGS_BINARY" ]; then
+    log "Installing local binary from $UMBGS_BINARY..."
+    cp "$UMBGS_BINARY" "${DATA_DIR}/umbgs-a"
+elif [ -f "${SCRIPT_DIR}/umbgs" ]; then
+    log "Installing binary from repo checkout..."
+    cp "${SCRIPT_DIR}/umbgs" "${DATA_DIR}/umbgs-a"
+elif [ -f "/tmp/ground-station/umbgs" ]; then
+    log "Installing binary from /tmp (Packer upload)..."
+    cp "/tmp/ground-station/umbgs" "${DATA_DIR}/umbgs-a"
 else
-    DOWNLOAD_URL="https://github.com/${GITHUB_REPO}/releases/download/${UMBGS_VERSION}/umbgs-linux-${ARCH}"
-fi
+    log "Downloading umbgs binary..."
+    ARCH=$(dpkg --print-architecture)
+    if [ "$ARCH" = "arm64" ] || [ "$ARCH" = "aarch64" ]; then
+        ARCH="arm64"
+    fi
 
-curl -fsSL -o "${DATA_DIR}/umbgs-a" "$DOWNLOAD_URL"
+    if [ "$UMBGS_VERSION" = "latest" ]; then
+        DOWNLOAD_URL="https://github.com/${GITHUB_REPO}/releases/latest/download/umbgs-linux-${ARCH}"
+    else
+        DOWNLOAD_URL="https://github.com/${GITHUB_REPO}/releases/download/${UMBGS_VERSION}/umbgs-linux-${ARCH}"
+    fi
+
+    curl -fsSL -o "${DATA_DIR}/umbgs-a" "$DOWNLOAD_URL"
+fi
 chmod +x "${DATA_DIR}/umbgs-a"
 echo "a" > "${DATA_DIR}/active"
 ln -sf "${DATA_DIR}/umbgs-a" "${DATA_DIR}/umbgs"
@@ -127,6 +139,7 @@ config_file "direwolf.service"         "${SYSTEMD_DIR}/direwolf.service"
 config_file "umbgs-watchdog.service"   "${SYSTEMD_DIR}/umbgs-watchdog.service"
 config_file "umbgs-watchdog.timer"     "${SYSTEMD_DIR}/umbgs-watchdog.timer"
 config_file "umbgs-firstboot.service"  "${SYSTEMD_DIR}/umbgs-firstboot.service"
+config_file "umbgs-wifi-enable.service" "${SYSTEMD_DIR}/umbgs-wifi-enable.service"
 
 # Watchdog + firstboot scripts
 fetch_file "watchdog.sh" /usr/local/bin/umbgs-watchdog.sh
@@ -137,7 +150,9 @@ chmod +x /usr/local/bin/umbgs-firstboot.sh
 # ─── Enable services ─────────────────────────────────────────────
 log "Enabling services..."
 systemctl daemon-reload
-systemctl enable gpsd direwolf umbgs umbgs-watchdog.timer umbgs-firstboot.service
+# NOTE: direwolf is managed by umbgs directly (rtl_fm | direwolf pipeline), not as a systemd service.
+systemctl enable gpsd umbgs umbgs-watchdog.timer umbgs-firstboot.service umbgs-wifi-enable.service
+systemctl disable direwolf 2>/dev/null || true
 
 # ─── Chrony GPS config ───────────────────────────────────────────
 if ! grep -q "SHM 0" /etc/chrony/chrony.conf 2>/dev/null; then
@@ -217,7 +232,13 @@ mkdir -p /usr/share/plymouth/themes/pix
 fetch_file "assets/splash.png" /usr/share/plymouth/themes/pix/splash.png
 config_file "pix.plymouth"     /usr/share/plymouth/themes/pix/pix.plymouth
 config_file "pix.script"       /usr/share/plymouth/themes/pix/pix.script
-plymouth-set-default-theme -R pix
+if $IN_CHROOT; then
+    # update-initramfs often fails under QEMU chroot; set theme now, rebuild on first boot
+    plymouth-set-default-theme pix
+    log "Plymouth theme set (initramfs rebuild deferred to first boot)"
+else
+    plymouth-set-default-theme -R pix
+fi
 
 # ─── Done ─────────────────────────────────────────────────────────
 log "=== Installation complete ==="
