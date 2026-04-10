@@ -95,7 +95,11 @@
         "# Enable and configure auto-login on tty1 (the touchscreen console)",
         "systemctl enable getty@tty1.service",
         "mkdir -p /etc/systemd/system/getty@tty1.service.d",
-        "printf '[Service]\\nExecStart=\\nExecStart=-/sbin/agetty --autologin umbgs --noclear %%I $TERM\\n' > /etc/systemd/system/getty@tty1.service.d/autologin.conf"
+        "printf '[Service]\\nExecStart=\\nExecStart=-/sbin/agetty --autologin umbgs --noclear %%I $TERM\\n' > /etc/systemd/system/getty@tty1.service.d/autologin.conf",
+
+        "# Enable SSH for remote debugging",
+        "systemctl enable ssh",
+        "touch /boot/firmware/ssh"
       ]
     }
   ],
