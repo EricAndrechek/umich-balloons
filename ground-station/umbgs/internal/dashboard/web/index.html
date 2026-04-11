@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=2.0, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>UMB Ground Station</title>
 <style>
 :root {
@@ -422,6 +422,61 @@ body.kiosk-mode, body.kiosk-mode *, body.kiosk-mode *::before, body.kiosk-mode *
  * Uses a JS class on body instead of media query so it only kicks in for
  * cog/kiosk, not phones loading the same URL. */
 body.kiosk-mode { zoom: 2.5; }
+
+/* --- Mobile / narrow-viewport responsive layout ---
+ * Phones loading the dashboard (typically via the AP hotspot) need a
+ * single-column layout, smaller card values so "100%" fits without
+ * overflow, and log lines that don't have their content crushed by the
+ * fixed-width timestamp/level/unit columns. These only kick in on real
+ * narrow viewports, so the kiosk (which reports 1920 wide via CSS zoom)
+ * and desktop browsers are unaffected.
+ *
+ * Scoped with :not(.kiosk-mode) to defend against the 7" panel ever being
+ * misdetected as narrow — the kiosk uses the desktop layout, always. */
+@media (max-width: 640px) {
+  body:not(.kiosk-mode) main { padding: 0; }
+  body:not(.kiosk-mode) .page { padding: 12px; }
+
+  /* Hero: smaller callsign so it doesn't wrap awkwardly */
+  body:not(.kiosk-mode) .hero { padding: 16px 12px 12px; margin-bottom: 12px; }
+  body:not(.kiosk-mode) .hero-callsign { font-size: 26px; letter-spacing: 1px; }
+  body:not(.kiosk-mode) .hero-meta { font-size: 12px; }
+  body:not(.kiosk-mode) .hero-meta span { margin: 0 4px; }
+
+  /* Cards: stack CPU/Memory/Temp into a 2-column grid so three cards
+   * fit in two rows rather than three crushed columns, and drop the
+   * big metric font so "100%" fits. */
+  body:not(.kiosk-mode) .grid-3 { grid-template-columns: 1fr 1fr; }
+  body:not(.kiosk-mode) .grid-2 { grid-template-columns: 1fr; }
+  body:not(.kiosk-mode) .card { padding: 12px; }
+  body:not(.kiosk-mode) .card-value { font-size: 22px; }
+  body:not(.kiosk-mode) .card-label { font-size: 11px; }
+  body:not(.kiosk-mode) .card-detail { font-size: 12px; }
+
+  /* Nav tabs: tighter padding and smaller text so all five fit. */
+  body:not(.kiosk-mode) nav button { padding: 10px 6px; font-size: 13px; }
+  body:not(.kiosk-mode) #refreshButton { padding: 10px 12px; }
+
+  /* Status pills: allow wrap naturally, smaller padding. */
+  body:not(.kiosk-mode) .status-row { gap: 6px; margin-bottom: 12px; }
+  body:not(.kiosk-mode) .pill { padding: 5px 10px; font-size: 12px; }
+
+  /* Log lines: timestamp + level + unit previously ate most of a phone's
+   * width before the message even started. Drop to stacked layout with
+   * the meta on line 1 and the message wrapping freely on line 2. */
+  body:not(.kiosk-mode) #logContainer { font-size: 12px; line-height: 1.4; padding: 4px 6px; }
+  body:not(.kiosk-mode) .log-line { flex-wrap: wrap; padding: 3px 4px; gap: 4px; }
+  body:not(.kiosk-mode) .log-line .timestamp { font-size: 11px; margin-right: 4px; }
+  body:not(.kiosk-mode) .log-line .lvl-badge { min-width: 34px; font-size: 10px; margin-right: 4px; }
+  body:not(.kiosk-mode) .log-line .unit { font-size: 11px; margin-right: 4px; }
+  body:not(.kiosk-mode) .log-line .msg { flex-basis: 100%; margin-left: 0; font-size: 12px; }
+
+  /* Log toolbar: let the dropdowns wrap cleanly. */
+  body:not(.kiosk-mode) .log-toolbar { padding: 6px 8px; gap: 6px; }
+  body:not(.kiosk-mode) .log-toolbar select,
+  body:not(.kiosk-mode) .log-toolbar button,
+  body:not(.kiosk-mode) .svc-dropdown-btn { font-size: 12px; padding: 5px 10px; height: 28px; }
+}
 </style>
 </head>
 <body>
@@ -719,8 +774,13 @@ body.kiosk-mode { zoom: 2.5; }
   function updateStats(s) {
     latestStats = s;
 
-    // Hero
-    if (s.version) document.getElementById('sysVersion').textContent = 'v' + s.version;
+    // Hero. Version string may already include a leading "v" (it's the
+    // git tag baked in via -ldflags -X main.version=...), so only prepend
+    // one if it's missing.
+    if (s.version) {
+      var v = s.version.charAt(0) === 'v' ? s.version : 'v' + s.version;
+      document.getElementById('sysVersion').textContent = v;
+    }
     document.getElementById('sysUptime').textContent = fmtUptime(s.uptime_seconds);
 
     // Status pills
