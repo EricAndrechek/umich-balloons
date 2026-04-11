@@ -76,7 +76,11 @@ func (s *Server) routes() {
 	})
 }
 
-// Run starts the HTTP server.
+// Run starts the HTTP server. It also binds a secondary listener on port
+// 80 that serves the captive portal probes and redirects everything else
+// to the real dashboard port. That lets phones that join the umbgs-ap
+// hotspot get a "Sign in to network" notification and land on the UI
+// without the operator having to type a URL or port number.
 func (s *Server) Run(ctx context.Context) error {
 	c := s.cfg.Get()
 	addr := fmt.Sprintf(":%d", c.Dashboard.Port)
@@ -85,11 +89,30 @@ func (s *Server) Run(ctx context.Context) error {
 		Handler: s.mux,
 	}
 
+	portalAddr := ":80"
+	portalMux := http.NewServeMux()
+	s.captivePortalRoutes(portalMux, c.Dashboard.Port)
+	portalSrv := &http.Server{
+		Addr:    portalAddr,
+		Handler: portalMux,
+	}
+
 	go func() {
 		<-ctx.Done()
 		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		srv.Shutdown(shutCtx)
+		portalSrv.Shutdown(shutCtx)
+	}()
+
+	// Captive portal listener is best-effort: if port 80 is already in
+	// use (another service, a dev machine), log and continue — the main
+	// dashboard must still come up.
+	go func() {
+		s.logger.Info("captive portal listening", "addr", portalAddr)
+		if err := portalSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			s.logger.Warn("captive portal listener failed", "error", err)
+		}
 	}()
 
 	s.logger.Info("dashboard listening", "addr", addr)
@@ -98,6 +121,64 @@ func (s *Server) Run(ctx context.Context) error {
 		return nil
 	}
 	return err
+}
+
+// captivePortalRoutes wires up the port-80 mux with handlers for the
+// well-known captive portal probe URLs used by iOS, macOS, Android,
+// Windows, and Firefox. Any unmatched path falls through to a 302
+// redirect pointing the client at the real dashboard.
+//
+// Platform references:
+//   - Apple:   http://captive.apple.com/hotspot-detect.html  (expects
+//     "Success" HTML; anything else triggers the portal sheet)
+//   - Android: http://connectivitycheck.gstatic.com/generate_204 and
+//     /gen_204 (expects 204 No Content; anything else triggers portal)
+//   - Windows: http://www.msftconnecttest.com/connecttest.txt (expects
+//     the literal text "Microsoft Connect Test"; anything else triggers)
+//   - Firefox: http://detectportal.firefox.com/success.txt (expects
+//     "success\n"; anything else triggers)
+//
+// We deliberately fail ALL of these probes by serving a 302 redirect so
+// every platform notices the captive portal and opens its in-app browser
+// pointed at the dashboard. DHCP option 114 (set by dnsmasq — see
+// internal/network) reinforces this on modern clients that honor RFC 8910.
+func (s *Server) captivePortalRoutes(mux *http.ServeMux, dashboardPort int) {
+	portalURL := fmt.Sprintf("http://10.42.0.1:%d/", dashboardPort)
+
+	redirect := func(w http.ResponseWriter, r *http.Request) {
+		// 302 is specifically what captive portal detection looks for.
+		// Apple treats any non-"Success" response as a portal, and the
+		// redirect body gives us a human-readable fallback if the client
+		// follows it directly.
+		w.Header().Set("Location", portalURL)
+		w.Header().Set("Cache-Control", "no-store")
+		w.WriteHeader(http.StatusFound)
+		fmt.Fprintf(w, `<html><body>Redirecting to <a href="%s">%s</a>...</body></html>`,
+			portalURL, portalURL)
+	}
+
+	// Known probe paths. We register them explicitly rather than relying
+	// purely on the catch-all so logs tell us which platform is probing.
+	probes := []string{
+		"/hotspot-detect.html",         // Apple iOS/macOS
+		"/library/test/success.html",   // Apple alt
+		"/generate_204",                // Android
+		"/gen_204",                     // Android
+		"/connecttest.txt",             // Windows
+		"/ncsi.txt",                    // Windows NCSI
+		"/redirect",                    // Windows
+		"/success.txt",                 // Firefox
+		"/canonical.html",              // Firefox
+	}
+	for _, p := range probes {
+		path := p
+		mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
+			s.logger.Debug("captive portal probe", "path", path, "ua", r.UserAgent())
+			redirect(w, r)
+		})
+	}
+	// Catch-all: anything else on port 80 also redirects.
+	mux.HandleFunc("/", redirect)
 }
 
 func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {

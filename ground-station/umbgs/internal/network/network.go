@@ -5,6 +5,9 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"time"
 
 	"github.com/godbus/dbus/v5"
@@ -36,8 +39,22 @@ func (m *Manager) Run(ctx context.Context) error {
 		m.logger.Warn("initial WiFi sync failed", "error", err)
 	}
 
+	// Write the dnsmasq drop-in BEFORE ensuring the AP exists — if NM
+	// brings the hotspot up on a fresh boot it'll launch dnsmasq with
+	// our config in place. If the file was updated since the last boot
+	// (e.g. after an auto-update), taking effect requires a reboot or
+	// an AP deactivate/reactivate cycle; we log a reminder rather than
+	// trying to force it from here.
+	if err := m.ensureCaptivePortalDNS(); err != nil {
+		m.logger.Warn("captive portal dnsmasq config failed", "error", err)
+	}
+
 	if err := m.ensureAPConnection(); err != nil {
 		m.logger.Warn("AP connection setup failed", "error", err)
+	}
+
+	if err := m.ensureAPFirewall(); err != nil {
+		m.logger.Warn("AP firewall rules failed", "error", err)
 	}
 
 	// Re-sync periodically in case config changes
@@ -219,5 +236,127 @@ func (m *Manager) ensureAPConnection() error {
 		return fmt.Errorf("add hotspot: %w", call.Err)
 	}
 	m.logger.Info("AP hotspot connection created", "ssid", apSSID)
+	return nil
+}
+
+// dnsmasqDropInPath is the file NM's shared-mode dnsmasq reads for extra
+// configuration. The directory is a standard NM feature: any .conf file
+// inside is appended to dnsmasq's command line when NM launches the
+// shared-mode instance. Documented at
+// https://developer-old.gnome.org/NetworkManager/stable/NetworkManager.conf.html
+// under "dns" / shared-mode extras.
+const dnsmasqDropInPath = "/etc/NetworkManager/dnsmasq-shared.d/umbgs-captive.conf"
+
+// captiveDNSConfig is the dnsmasq drop-in that makes the AP behave as a
+// captive portal:
+//
+//   - address=/#/10.42.0.1 is wildcard DNS: every name resolves to the
+//     Pi, so the OS's captive-portal probe (captive.apple.com,
+//     connectivitycheck.gstatic.com, etc.) lands on our port-80 listener
+//     and gets a 302 that trips the portal UI.
+//
+//   - dhcp-option=114,http://10.42.0.1/ is RFC 8910: modern iOS/Android
+//     read option 114 and auto-open that URL in the captive portal
+//     sheet without waiting for a failed probe.
+//
+//   - no-resolv + no-hosts keeps dnsmasq from leaking real DNS lookups
+//     out through the Pi's upstream connection. Without these, dnsmasq
+//     would try to forward queries for e.g. captive.apple.com via
+//     /etc/resolv.conf and return the real IP, defeating the wildcard.
+//
+// 10.42.0.1 is NetworkManager's hardcoded default for shared-mode
+// connections; changing it would require explicitly setting
+// ipv4.addresses on the hotspot profile.
+const captiveDNSConfig = `# Managed by umbgs — do not edit by hand.
+# Wildcard DNS: every lookup returns the Pi so captive portal probes
+# (apple/android/windows/firefox) hit our port-80 listener and get the
+# 302 that triggers the portal UI.
+address=/#/10.42.0.1
+
+# Don't leak DNS out through the Pi's upstream connection — we want
+# every query to be answered locally by the wildcard above.
+no-resolv
+no-hosts
+
+# RFC 8910 captive portal URL — modern clients honor this and auto-open
+# the dashboard without needing a failed probe first.
+dhcp-option=114,http://10.42.0.1/
+`
+
+// ensureCaptivePortalDNS writes the dnsmasq drop-in for the AP hotspot.
+// Idempotent: if the on-disk content matches already, it's a no-op.
+// Non-fatal: if the directory doesn't exist (non-NM systems, odd
+// distros) or we can't write, we log and continue — the dashboard will
+// still be reachable via the AP's IP, just without wildcard DNS or
+// option 114.
+func (m *Manager) ensureCaptivePortalDNS() error {
+	dir := filepath.Dir(dnsmasqDropInPath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("mkdir %s: %w", dir, err)
+	}
+	existing, err := os.ReadFile(dnsmasqDropInPath)
+	if err == nil && string(existing) == captiveDNSConfig {
+		m.logger.Debug("captive portal dnsmasq config already current")
+		return nil
+	}
+	if err := os.WriteFile(dnsmasqDropInPath, []byte(captiveDNSConfig), 0644); err != nil {
+		return fmt.Errorf("write %s: %w", dnsmasqDropInPath, err)
+	}
+	m.logger.Info("captive portal dnsmasq config updated",
+		"path", dnsmasqDropInPath,
+		"note", "takes effect on next AP activation or reboot")
+	return nil
+}
+
+// ensureAPFirewall installs iptables rules that:
+//
+//  1. Block FORWARD from the wifi interface. NM's "shared" mode enables
+//     IP masquerading and forwarding from the AP clients out through
+//     whatever uplink is active (ethernet, cellular). For a field
+//     ground station that's actively bad: a phone joining the hotspot
+//     would tunnel all its traffic through the Pi's LTE stick, chewing
+//     up the data plan and giving a terrible UX. This rule ensures AP
+//     clients can only reach the Pi itself (INPUT chain, unaffected).
+//
+//  2. REDIRECT port 80 on the wifi interface to the dashboard port.
+//     Captive portal probes hit port 80 regardless; we want them all
+//     to land on our captive portal listener. (The listener already
+//     binds :80 on all interfaces, so this REDIRECT is defensive for
+//     the case where something else is holding :80.)
+//
+// Both rules are idempotent: we check with -C first and only -I if
+// absent. iptables is assumed present — it ships by default on Pi OS
+// and is pulled in transitively by NetworkManager.
+//
+// We don't clean up on shutdown: the rules are safe to leave in place
+// (they only affect the wifi interface which is a no-op during station
+// mode) and systemd restart cycles would otherwise thrash the chain.
+func (m *Manager) ensureAPFirewall() error {
+	const iface = "wlan0"
+
+	if _, err := exec.LookPath("iptables"); err != nil {
+		return fmt.Errorf("iptables not found: %w", err)
+	}
+
+	addIfMissing := func(table, chain string, rule ...string) error {
+		checkArgs := append([]string{"-t", table, "-C", chain}, rule...)
+		if err := exec.Command("iptables", checkArgs...).Run(); err == nil {
+			return nil // already present
+		}
+		insertArgs := append([]string{"-t", table, "-I", chain, "1"}, rule...)
+		out, err := exec.Command("iptables", insertArgs...).CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("iptables %v: %w: %s", insertArgs, err, string(out))
+		}
+		return nil
+	}
+
+	// 1. Drop forwarded traffic from the wifi interface so AP clients
+	//    can't reach the ethernet uplink.
+	if err := addIfMissing("filter", "FORWARD", "-i", iface, "-j", "DROP"); err != nil {
+		return err
+	}
+	m.logger.Debug("iptables FORWARD DROP installed", "iface", iface)
+
 	return nil
 }
