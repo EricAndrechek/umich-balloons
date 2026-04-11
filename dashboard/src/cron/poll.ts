@@ -20,6 +20,14 @@ const ALTITUDE_BALLOON_THRESHOLD = 1000; // meters — above this, classify as b
 const LAUNCH_ALTITUDE_THRESHOLD = 500;
 const LAUNCH_ALTITUDE_DELTA = 100; // must gain this much altitude to auto-detect launch
 
+// Sanity cap on a computed contact distance. The current world record for an
+// amateur balloon LoRa contact is ~1100 km, and APRS line-of-sight from a
+// 30 km balloon is ~620 km. Anything beyond this is almost certainly a bad
+// uploader position (e.g. a chase station briefly reporting (0,0) or a
+// lat/lon swap), so we discard the distance to keep the leaderboard sane.
+// The contact row is still inserted — only the distance_km field is nulled.
+const MAX_REASONABLE_DISTANCE_KM = 1500;
+
 /**
  * Extract the APRS symbol code from a raw APRS packet.
  * Position reports look like `!ddmm.mmN/dddmm.mmWX...` where `/` is the
@@ -411,6 +419,12 @@ async function processLaunchGroup(
       record.lon != null
     ) {
       distanceKm = haversine(record.lat, record.lon, uploaderLat, uploaderLon);
+      // Drop physically impossible distances — see MAX_REASONABLE_DISTANCE_KM.
+      // We null the field rather than skip the row so the contact still
+      // appears in counts/timelines, just without a poisoned best-distance.
+      if (distanceKm != null && distanceKm > MAX_REASONABLE_DISTANCE_KM) {
+        distanceKm = null;
+      }
     }
 
     // Force modulation to a non-null string so the unique index treats rows
