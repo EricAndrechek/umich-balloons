@@ -11,13 +11,22 @@
 // difference triggers a download. No semver ordering — if the tags differ we
 // update, which correctly handles dev→release, release→release, and accidental
 // downgrades during a rollback.
+//
+// Check vs Apply: Check only fetches release metadata and returns whether an
+// update is available. Apply does the actual download + hash verify + slot
+// swap. This split exists so the dashboard can offer a "review then install"
+// UX and so that a long download on a marginal uplink never blocks an HTTP
+// request handler. Apply is expected to run in a goroutine with the updater's
+// State() polled for progress.
 package updater
 
 import (
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -25,6 +34,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/EricAndrechek/umich-balloons/ground-station/umbgs/internal/config"
@@ -47,8 +57,18 @@ const (
 	defaultRepo = "EricAndrechek/umich-balloons"
 
 	// Asset names must match those published by the release workflow.
-	assetBinary = "umbgs-linux-arm64"
-	assetSHA    = "umbgs-linux-arm64.sha256"
+	//
+	// assetBinaryGZ is preferred over assetBinary when both are present:
+	// gzip -9 on a Go binary typically gives ~60% reduction, which is a
+	// meaningful bandwidth win on a chase vehicle's one-bar LTE uplink.
+	// The updater streams the download through gzip.NewReader so the
+	// decompressed content is what hits the hash pipeline AND the slot
+	// file — i.e., we verify what's actually installed, not the transport
+	// blob. assetBinary is kept as a fallback for releases that predate
+	// the .gz publication or that are cut by hand without it.
+	assetBinary   = "umbgs-linux-arm64"
+	assetBinaryGZ = "umbgs-linux-arm64.gz"
+	assetSHA      = "umbgs-linux-arm64.sha256"
 
 	// defaultHealthyDelay is how long the new binary must run before we
 	// clear the pending marker. Must be meaningfully shorter than the
@@ -62,7 +82,54 @@ const (
 	// A binary that crashes within 3 minutes of every boot will leave the
 	// pending file untouched, and at T+10min the watchdog will roll back.
 	defaultHealthyDelay = 3 * time.Minute
+
+	// progressInterval throttles progress reports to keep stateMu from
+	// being hammered during a fast download. 200ms is fast enough to feel
+	// live on the dashboard while keeping overhead negligible.
+	progressInterval = 200 * time.Millisecond
 )
+
+// ErrApplyInProgress is returned by Apply when another Apply call is already
+// running. Callers that want to join an in-progress update should poll
+// State() instead of retrying Apply.
+var ErrApplyInProgress = errors.New("update already in progress")
+
+// Phase is the updater's current high-level activity. Clients render their
+// UI from this (spinner, progress bar, restart prompt) rather than parsing
+// Message strings.
+type Phase string
+
+const (
+	PhaseIdle        Phase = "idle"        // nothing happening
+	PhaseChecking    Phase = "checking"    // fetching metadata
+	PhaseDownloading Phase = "downloading" // streaming the binary
+	PhaseVerifying   Phase = "verifying"   // hash check + slot swap
+	PhaseApplied     Phase = "applied"     // installed, restart required
+	PhaseError       Phase = "error"       // last attempt failed
+)
+
+// State is the snapshot returned by State(). Safe to marshal as JSON.
+type State struct {
+	Phase          Phase     `json:"phase"`
+	Message        string    `json:"message"`
+	CurrentVersion string    `json:"current_version"`
+	LatestVersion  string    `json:"latest_version,omitempty"`
+	Downloaded     int64     `json:"downloaded"`
+	Total          int64     `json:"total"`
+	UpdatedAt      time.Time `json:"updated_at"`
+}
+
+// CheckResult is the synchronous answer to "is there an update available?"
+// Available is true only when a newer tag exists AND the required assets
+// are present on the release — so the dashboard can safely offer an
+// "Install" button on Available=true without risking a mid-download failure
+// due to a broken release.
+type CheckResult struct {
+	Available      bool   `json:"available"`
+	CurrentVersion string `json:"current_version"`
+	LatestVersion  string `json:"latest_version,omitempty"`
+	Message        string `json:"message"`
+}
 
 // Updater checks for and applies binary updates.
 type Updater struct {
@@ -81,6 +148,17 @@ type Updater struct {
 	symlink      string
 	httpClient   *http.Client
 	healthyDelay time.Duration
+
+	// stateMu guards state. Read in State(), written via setState().
+	stateMu sync.RWMutex
+	state   State
+
+	// applyMu is held for the duration of an Apply call so that concurrent
+	// callers (e.g., two dashboards clicking Install at the same time) get
+	// ErrApplyInProgress instead of racing each other through the download
+	// and slot swap. TryLock is used so we reject immediately rather than
+	// queuing.
+	applyMu sync.Mutex
 }
 
 // NewUpdater creates an updater.
@@ -96,12 +174,43 @@ func NewUpdater(cfg *config.Manager, version string, logger *slog.Logger) *Updat
 		activePath:  activeFile,
 		pendingPath: pendingFile,
 		symlink:     symlinkPath,
-		// Generous timeout: the binary is ~22MB and a chase vehicle on
-		// a spotty cellular uplink needs some slack. The caller's ctx
-		// is still respected for cancellation.
-		httpClient:   &http.Client{Timeout: 5 * time.Minute},
+		// No http.Client.Timeout: a 22 MB binary over a one-bar LTE link
+		// can legitimately take 10+ minutes. Cancellation is driven by the
+		// ctx passed to Check/Apply, so callers can still abort.
+		httpClient:   &http.Client{},
 		healthyDelay: defaultHealthyDelay,
+		state: State{
+			Phase:          PhaseIdle,
+			CurrentVersion: version,
+			UpdatedAt:      time.Now(),
+		},
 	}
+}
+
+// State returns a snapshot of the updater's current state. Safe to call
+// concurrently with Check/Apply.
+func (u *Updater) State() State {
+	u.stateMu.RLock()
+	defer u.stateMu.RUnlock()
+	return u.state
+}
+
+// setState updates the state under lock. Callers mutate the state via the
+// callback so that all changes to UpdatedAt happen in one place.
+func (u *Updater) setState(fn func(s *State)) {
+	u.stateMu.Lock()
+	defer u.stateMu.Unlock()
+	fn(&u.state)
+	u.state.UpdatedAt = time.Now()
+}
+
+// failState is a convenience that transitions to PhaseError with the given
+// message. Used by Apply when any stage fails.
+func (u *Updater) failState(msg string) {
+	u.setState(func(s *State) {
+		s.Phase = PhaseError
+		s.Message = msg
+	})
 }
 
 // markHealthy removes the pending file, confirming the current version is stable.
@@ -138,7 +247,7 @@ func InactiveSlot() string {
 	return "a"
 }
 
-// inactiveSlot is the method form used inside Check so tests can override
+// inactiveSlot is the method form used inside Apply so tests can override
 // the active/inactive file paths.
 func (u *Updater) inactiveSlot() string {
 	data, err := os.ReadFile(u.activePath)
@@ -161,8 +270,8 @@ func (u *Updater) slotPath(slot string) string {
 
 // Run blocks until context is cancelled. After a delay (healthyDelay), it
 // clears the pending marker file to signal to the watchdog that this boot
-// is stable. Updates themselves are triggered manually via Check (called
-// from the dashboard), not from Run.
+// is stable. Updates themselves are triggered manually via Check/Apply
+// (called from the dashboard), not from Run.
 //
 // The delayed mark-healthy is load-bearing: if Run cleared the pending
 // marker immediately at startup (the pre-2026-04 behavior), a new binary
@@ -206,29 +315,32 @@ func (u *Updater) Run(ctx context.Context) error {
 	return ctx.Err()
 }
 
-// Result describes the outcome of a Check call. The dashboard renders
-// Message verbatim so it must be human-readable.
-type Result struct {
-	Updated        bool   `json:"updated"`
-	CurrentVersion string `json:"current_version"`
-	LatestVersion  string `json:"latest_version,omitempty"`
-	Message        string `json:"message"`
-}
-
-// Check queries GitHub Releases and applies an update if one is available.
-// Returns a Result describing what happened; the dashboard surfaces
-// Result.Message to the user. An error is returned only for failures that
-// should be treated as such by the caller (network errors, corrupt downloads,
-// filesystem errors). "No release yet" and "already up to date" are normal
-// outcomes and return Result with nil error.
-func (u *Updater) Check(ctx context.Context) (Result, error) {
+// Check queries GitHub Releases for the latest release and reports whether
+// an update is available. It never downloads anything — call Apply to
+// actually install. Returning (CheckResult, nil) with Available=false is a
+// normal outcome ("already up to date", "no releases yet"); errors are
+// returned only for unexpected failures (network, auth, malformed asset
+// list).
+//
+// Check is cheap (~1 HTTP request) and safe to call from a synchronous
+// HTTP handler. It also verifies that the release has the expected assets
+// so that the dashboard never offers an "Install" button for a broken
+// release.
+//
+// Check deliberately does NOT touch State(). Only Apply writes state —
+// otherwise a Check running concurrently with an Apply would clobber the
+// in-progress download's progress (e.g., another tab clicking "Check"
+// during your install would reset phase from "downloading" back to
+// "checking"). The Check result is returned directly to the caller; the
+// dashboard renders it from the HTTP response.
+func (u *Updater) Check(ctx context.Context) (CheckResult, error) {
 	c := u.cfg.Get()
 	channel := c.Update.Channel
 	if channel == "" {
 		channel = "stable"
 	}
 
-	result := Result{CurrentVersion: u.version}
+	result := CheckResult{CurrentVersion: u.version}
 	u.logger.Info("checking for updates",
 		"repo", u.repo, "channel", channel, "current", u.version)
 
@@ -237,7 +349,7 @@ func (u *Updater) Check(ctx context.Context) (Result, error) {
 		return result, fmt.Errorf("fetch release metadata: %w", err)
 	}
 	if release == nil {
-		result.Message = "no releases published yet"
+		result.Message = "No releases published yet"
 		u.logger.Info("no releases available")
 		return result, nil
 	}
@@ -248,43 +360,153 @@ func (u *Updater) Check(ctx context.Context) (Result, error) {
 	// builds ("dev") always see an update as available, which is the
 	// behavior we want on a freshly-flashed card.
 	if release.TagName == u.version {
-		result.Message = "already up to date (" + u.version + ")"
+		result.Message = "Already up to date (" + u.version + ")"
 		u.logger.Info("already up to date", "version", u.version)
 		return result, nil
 	}
 
+	// Verify required assets exist before declaring the update available.
+	// We don't want the user to click "Install" on something that will
+	// fail at download — catch it here while Check is still synchronous.
+	if _, ok := selectAssets(release); !ok {
+		return result, fmt.Errorf("release %s is missing required assets (need %s or %s, plus %s)",
+			release.TagName, assetBinaryGZ, assetBinary, assetSHA)
+	}
+
+	result.Available = true
+	result.Message = "Update available: " + release.TagName
 	u.logger.Info("update available",
 		"current", u.version, "latest", release.TagName)
+	return result, nil
+}
 
-	// Locate the required assets by name.
-	var binURL, shaURL string
-	for _, a := range release.Assets {
-		switch a.Name {
-		case assetBinary:
-			binURL = a.BrowserDownloadURL
-		case assetSHA:
-			shaURL = a.BrowserDownloadURL
-		}
+// Apply downloads the latest release and installs it into the inactive
+// slot. It is long-running (minutes on a slow uplink) and should be called
+// from a goroutine if the caller needs non-blocking UX — the dashboard
+// kicks this off from its /api/update/apply handler and polls /status.
+//
+// Concurrent Apply calls are rejected with ErrApplyInProgress so the first
+// caller wins and subsequent clicks don't race through the slot swap.
+//
+// Progress is published via State(); there is no streaming response.
+// Cancellation is driven by ctx — callers that want to abort should cancel
+// the ctx they passed in.
+func (u *Updater) Apply(ctx context.Context) error {
+	if !u.applyMu.TryLock() {
+		return ErrApplyInProgress
 	}
-	if binURL == "" || shaURL == "" {
-		return result, fmt.Errorf("release %s is missing required assets (need %s and %s)",
-			release.TagName, assetBinary, assetSHA)
+	defer u.applyMu.Unlock()
+
+	c := u.cfg.Get()
+	channel := c.Update.Channel
+	if channel == "" {
+		channel = "stable"
 	}
 
-	expectedHash, err := u.fetchSHA256(ctx, shaURL)
+	u.setState(func(s *State) {
+		s.Phase = PhaseChecking
+		s.Message = "Fetching release metadata..."
+		s.CurrentVersion = u.version
+		s.Downloaded = 0
+		s.Total = 0
+	})
+	u.logger.Info("applying update", "repo", u.repo, "channel", channel)
+
+	release, err := u.fetchRelease(ctx, channel)
 	if err != nil {
-		return result, fmt.Errorf("fetch sha256: %w", err)
+		u.failState("Fetch release: " + err.Error())
+		return fmt.Errorf("fetch release metadata: %w", err)
+	}
+	if release == nil {
+		u.failState("No releases available")
+		return errors.New("no releases available")
+	}
+	if release.TagName == u.version {
+		u.setState(func(s *State) {
+			s.Phase = PhaseIdle
+			s.Message = "Already up to date (" + u.version + ")"
+			s.LatestVersion = release.TagName
+		})
+		return nil
 	}
 
-	if err := u.downloadAndApply(ctx, binURL, expectedHash); err != nil {
-		return result, fmt.Errorf("apply: %w", err)
+	sel, ok := selectAssets(release)
+	if !ok {
+		msg := fmt.Sprintf("release %s is missing required assets (need %s or %s, plus %s)",
+			release.TagName, assetBinaryGZ, assetBinary, assetSHA)
+		u.failState(msg)
+		return errors.New(msg)
 	}
 
-	result.Updated = true
-	result.Message = "updated to " + release.TagName + " — restart required"
+	u.setState(func(s *State) {
+		s.LatestVersion = release.TagName
+		s.Message = "Fetching checksum..."
+	})
+
+	expectedHash, err := u.fetchSHA256(ctx, sel.shaURL)
+	if err != nil {
+		u.failState("Fetch sha256: " + err.Error())
+		return fmt.Errorf("fetch sha256: %w", err)
+	}
+
+	dlMsg := "Downloading " + release.TagName + "..."
+	if sel.gzipped {
+		dlMsg = "Downloading " + release.TagName + " (compressed)..."
+	}
+	u.setState(func(s *State) {
+		s.Phase = PhaseDownloading
+		s.Message = dlMsg
+		s.Total = sel.binSize
+		s.Downloaded = 0
+	})
+
+	if err := u.downloadAndApply(ctx, sel.binURL, expectedHash, sel.gzipped); err != nil {
+		u.failState("Install failed: " + err.Error())
+		return fmt.Errorf("apply: %w", err)
+	}
+
+	u.setState(func(s *State) {
+		s.Phase = PhaseApplied
+		s.Message = "Installed " + release.TagName + " — restart required"
+	})
 	u.logger.Info("update applied, will take effect on next restart",
 		"version", release.TagName)
-	return result, nil
+	return nil
+}
+
+// assetSelection is the outcome of picking the right download for a
+// release. Prefer the gzipped asset when present; fall back to the raw
+// binary. The sha256 hash always describes the DECOMPRESSED binary, so
+// hash verification lives on the decompressed side of the pipeline
+// regardless of which asset we downloaded.
+type assetSelection struct {
+	binURL   string
+	binSize  int64
+	shaURL   string
+	gzipped  bool
+}
+
+// selectAssets picks the best download and checksum asset from a release.
+// Returns ok=false if the release doesn't have enough assets to install —
+// Check uses this to suppress the Install button for broken releases.
+func selectAssets(release *githubRelease) (assetSelection, bool) {
+	var sel assetSelection
+	assets := make(map[string]releaseAsset, len(release.Assets))
+	for _, a := range release.Assets {
+		assets[a.Name] = a
+	}
+	if a, ok := assets[assetBinaryGZ]; ok {
+		sel.binURL = a.BrowserDownloadURL
+		sel.binSize = a.Size
+		sel.gzipped = true
+	} else if a, ok := assets[assetBinary]; ok {
+		sel.binURL = a.BrowserDownloadURL
+		sel.binSize = a.Size
+	}
+	if a, ok := assets[assetSHA]; ok {
+		sel.shaURL = a.BrowserDownloadURL
+	}
+	return sel, sel.binURL != "" && sel.shaURL != ""
 }
 
 // githubRelease mirrors the subset of the GitHub release JSON we care about.
@@ -394,7 +616,20 @@ func (u *Updater) fetchSHA256(ctx context.Context, url string) (string, error) {
 
 // downloadAndApply streams the binary from url into the inactive slot,
 // verifies the hash as it writes, then atomically swaps the active slot.
-func (u *Updater) downloadAndApply(ctx context.Context, url, expectedHash string) error {
+// Download progress is reported via setState through a progressReader.
+//
+// When gzipped=true, the url points at a .gz asset and we wrap the body
+// with gzip.NewReader before passing it to apply(). Important invariant:
+// the progressReader sits BELOW gzip.Reader in the stream, so progress
+// counts COMPRESSED bytes (matching Content-Length of the .gz), while the
+// hasher+file in apply() see DECOMPRESSED bytes (matching the published
+// sha256). That way the progress bar tracks what's actually on the wire
+// and the hash check proves the installed binary is intact.
+//
+// A corrupt .gz surfaces as an io.Copy error (gzip.Reader reports CRC
+// failures on the final Read that hits EOF), which apply() turns into a
+// tmp-file cleanup and a returned error — the slot swap never happens.
+func (u *Updater) downloadAndApply(ctx context.Context, url, expectedHash string, gzipped bool) error {
 	resp, err := u.get(ctx, url, "")
 	if err != nil {
 		return err
@@ -403,7 +638,60 @@ func (u *Updater) downloadAndApply(ctx context.Context, url, expectedHash string
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("HTTP %d downloading binary", resp.StatusCode)
 	}
-	return u.apply(resp.Body, expectedHash)
+
+	// Prefer Content-Length if the server provided it; otherwise keep
+	// whatever size the release metadata told us. Some mirrors/proxies
+	// drop the header, and chunked transfer encoding omits it entirely.
+	if resp.ContentLength > 0 {
+		u.setState(func(s *State) { s.Total = resp.ContentLength })
+	}
+
+	var reader io.Reader = &progressReader{
+		r: resp.Body,
+		onProgress: func(n int64) {
+			u.setState(func(s *State) { s.Downloaded = n })
+		},
+	}
+
+	if gzipped {
+		gr, err := gzip.NewReader(reader)
+		if err != nil {
+			return fmt.Errorf("gzip header: %w", err)
+		}
+		defer gr.Close()
+		reader = gr
+	}
+
+	return u.apply(reader, expectedHash)
+}
+
+// progressReader wraps an io.Reader and reports cumulative bytes read via
+// onProgress. Reports are throttled to progressInterval so the state mutex
+// isn't hammered during a fast download. The final read (io.EOF) always
+// flushes so the dashboard sees a 100% value before PhaseApplied.
+type progressReader struct {
+	r          io.Reader
+	onProgress func(int64)
+	read       int64
+	lastReport time.Time
+}
+
+func (p *progressReader) Read(b []byte) (int, error) {
+	n, err := p.r.Read(b)
+	if n > 0 {
+		p.read += int64(n)
+	}
+	// Report on any error (including EOF) so the final total always lands
+	// before io.Copy returns, or on any read that's far enough past the
+	// last report. This covers the common case where http.Body returns
+	// (n, nil) repeatedly followed by (0, EOF) — without the err check we'd
+	// miss the final total on a fast download.
+	now := time.Now()
+	if err != nil || now.Sub(p.lastReport) >= progressInterval {
+		p.lastReport = now
+		p.onProgress(p.read)
+	}
+	return n, err
 }
 
 // get performs a GET with the headers GitHub expects.
@@ -444,6 +732,13 @@ func (u *Updater) apply(body io.Reader, expectedHash string) error {
 		os.Remove(tmpPath)
 		return fmt.Errorf("close temp: %w", err)
 	}
+
+	// Download done, now verify + swap — cheap but distinct phase so the
+	// dashboard can surface it.
+	u.setState(func(s *State) {
+		s.Phase = PhaseVerifying
+		s.Message = "Verifying..."
+	})
 
 	actualHash := hex.EncodeToString(hasher.Sum(nil))
 	if actualHash != expectedHash {

@@ -3,6 +3,7 @@ package dashboard
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -61,7 +62,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/config", s.handleConfig)
 	s.mux.HandleFunc("/api/stats", s.handleStats)
 	s.mux.HandleFunc("/api/failed", s.handleFailed)
-	s.mux.HandleFunc("/api/update", s.handleUpdate)
+	s.mux.HandleFunc("/api/update/check", s.handleUpdateCheck)
+	s.mux.HandleFunc("/api/update/apply", s.handleUpdateApply)
+	s.mux.HandleFunc("/api/update/status", s.handleUpdateStatus)
 	s.mux.HandleFunc("/api/reboot", s.handleReboot)
 	s.mux.HandleFunc("/api/crashlogs", s.handleCrashLogs)
 	s.mux.HandleFunc("/api/services/restart/", s.handleServiceRestart)
@@ -281,7 +284,11 @@ func (s *Server) handleFailed(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(pkts)
 }
 
-func (s *Server) handleUpdate(w http.ResponseWriter, r *http.Request) {
+// handleUpdateCheck is the fast, synchronous half of the update flow. It
+// queries GitHub for the latest release and reports back whether an update
+// is available. No download happens here — the dashboard uses the result
+// to decide whether to offer an "Install" button.
+func (s *Server) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -305,11 +312,61 @@ func (s *Server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"ok":              true,
+		"available":       result.Available,
 		"message":         result.Message,
-		"updated":         result.Updated,
 		"current_version": result.CurrentVersion,
 		"latest_version":  result.LatestVersion,
 	})
+}
+
+// handleUpdateApply kicks off an Apply() in a background goroutine and
+// returns immediately. The caller polls /api/update/status for progress.
+//
+// The goroutine uses context.Background() rather than r.Context() because
+// the HTTP request ends the instant we return the 202 — tying the download
+// to r.Context() would cancel it mid-stream. A trade-off: if the server
+// shuts down mid-download, the tmp file is discarded by the next Apply,
+// and the slot swap hasn't happened yet so rollback is unnecessary.
+//
+// Concurrent apply requests are rejected by Apply() itself via
+// ErrApplyInProgress; we surface that to the client so a double-click
+// doesn't trigger a second download.
+func (s *Server) handleUpdateApply(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	s.logger.Info("manual update apply triggered via dashboard")
+
+	go func() {
+		if err := s.updater.Apply(context.Background()); err != nil {
+			if errors.Is(err, updater.ErrApplyInProgress) {
+				// Another Apply raced us — benign, state is already
+				// being published by the winner.
+				return
+			}
+			s.logger.Warn("update apply failed", "error", err)
+		}
+	}()
+
+	// Give the goroutine a tick to take applyMu so the state we return
+	// reflects the in-progress apply rather than the previous idle state.
+	// Not strictly necessary (client will poll anyway) but avoids a
+	// momentarily-stale first render.
+	time.Sleep(10 * time.Millisecond)
+
+	state := s.updater.State()
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	json.NewEncoder(w).Encode(state)
+}
+
+// handleUpdateStatus returns the current updater State for polling clients.
+// Cheap — just a mutex-guarded struct copy, no I/O.
+func (s *Server) handleUpdateStatus(w http.ResponseWriter, r *http.Request) {
+	state := s.updater.State()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(state)
 }
 
 func (s *Server) handleReboot(w http.ResponseWriter, r *http.Request) {

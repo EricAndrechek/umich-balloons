@@ -378,6 +378,22 @@ main { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; }
 }
 #crashLogStatus { margin-top: 8px; font-style: italic; font-size: 13px; color: var(--text-muted); }
 #updateStatus { margin-top: 8px; font-size: 13px; font-style: italic; color: var(--text-muted); }
+.update-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+#updateProgressWrap {
+  margin-top: 10px; display: none;
+}
+#updateProgressWrap.visible { display: block; }
+#updateProgressBar {
+  height: 10px; background: var(--surface-raised); border: 1px solid var(--border);
+  border-radius: var(--radius); overflow: hidden;
+}
+#updateProgressFill {
+  height: 100%; width: 0%; background: var(--accent);
+  transition: width 250ms linear;
+}
+#updateProgressLabel {
+  margin-top: 4px; font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums;
+}
 
 /* --- Status Bar --- */
 #statusBar {
@@ -650,8 +666,15 @@ body.kiosk-mode { zoom: 2.5; }
 
     <div class="admin-section">
       <h3>Software Update</h3>
-      <button class="btn btn-secondary" id="checkUpdateBtn">Check for Updates</button>
+      <div class="update-actions">
+        <button class="btn btn-secondary" id="checkUpdateBtn">Check for Updates</button>
+        <button class="btn" id="applyUpdateBtn" style="display:none;">Install Update</button>
+      </div>
       <div id="updateStatus"></div>
+      <div id="updateProgressWrap">
+        <div id="updateProgressBar"><div id="updateProgressFill"></div></div>
+        <div id="updateProgressLabel">0 / 0 bytes</div>
+      </div>
     </div>
 
     <div class="admin-section">
@@ -1329,19 +1352,230 @@ body.kiosk-mode { zoom: 2.5; }
     .catch(function(e) { st.textContent = 'Error: ' + e; st.style.color = 'var(--error)'; });
   };
 
-  // --- Admin actions ---
-  document.getElementById('checkUpdateBtn').onclick = function() {
-    var st = document.getElementById('updateStatus');
-    var btn = document.getElementById('checkUpdateBtn');
-    st.textContent = 'Checking...'; st.style.color = 'var(--text-muted)'; btn.disabled = true;
-    fetch('/api/update', { method: 'POST' })
+  // --- Admin actions: software update ---
+  //
+  // Two-step flow: Check hits GitHub for metadata (fast), then shows an
+  // Install button if an update is available. Install kicks off an async
+  // Apply on the server and polls /api/update/status for progress.
+  var updatePollTimer = null;
+  var checkBtn = document.getElementById('checkUpdateBtn');
+  var applyBtn = document.getElementById('applyUpdateBtn');
+  var updateStatusEl = document.getElementById('updateStatus');
+  var progressWrap = document.getElementById('updateProgressWrap');
+  var progressFill = document.getElementById('updateProgressFill');
+  var progressLabel = document.getElementById('updateProgressLabel');
+
+  function fmtBytes(n) {
+    if (!n) return '0 B';
+    if (n < 1024) return n + ' B';
+    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+    return (n / (1024 * 1024)).toFixed(2) + ' MB';
+  }
+
+  function fmtRate(bytesPerSec) {
+    if (!bytesPerSec || !isFinite(bytesPerSec)) return '';
+    return fmtBytes(bytesPerSec) + '/s';
+  }
+
+  function fmtEta(sec) {
+    if (!isFinite(sec) || sec <= 0) return '';
+    sec = Math.round(sec);
+    if (sec < 60) return sec + 's';
+    var m = Math.floor(sec / 60);
+    var s = sec % 60;
+    if (m < 60) return m + 'm ' + s + 's';
+    var h = Math.floor(m / 60);
+    m = m % 60;
+    return h + 'h ' + m + 'm';
+  }
+
+  function setUpdateStatus(text, color) {
+    updateStatusEl.textContent = text;
+    updateStatusEl.style.color = color || 'var(--text-muted)';
+  }
+
+  // Rate/ETA are computed client-side from consecutive poll samples.
+  // lastSample holds { bytes, t } from the previous poll so we can take
+  // the delta. Reset on resume/restart so stale samples don't pollute.
+  var lastSample = null;
+  var currentRate = 0; // bytes/sec, smoothed via EWMA
+
+  function resetRateTracking() {
+    lastSample = null;
+    currentRate = 0;
+  }
+
+  function updateRate(downloaded) {
+    var now = Date.now();
+    if (lastSample === null) {
+      lastSample = { bytes: downloaded, t: now };
+      return;
+    }
+    var dt = (now - lastSample.t) / 1000;
+    var db = downloaded - lastSample.bytes;
+    if (dt > 0.05 && db >= 0) {
+      var instant = db / dt;
+      // EWMA smoothing — a bit under 1s half-life at 500ms polls.
+      if (currentRate === 0) {
+        currentRate = instant;
+      } else {
+        currentRate = 0.6 * instant + 0.4 * currentRate;
+      }
+      lastSample = { bytes: downloaded, t: now };
+    }
+  }
+
+  function showProgress(state) {
+    progressWrap.classList.add('visible');
+    var pct = 0;
+    if (state.total > 0) {
+      pct = Math.min(100, Math.floor((state.downloaded / state.total) * 100));
+    }
+    progressFill.style.width = pct + '%';
+
+    var parts = [];
+    if (state.total > 0) {
+      parts.push(fmtBytes(state.downloaded) + ' / ' + fmtBytes(state.total) + ' (' + pct + '%)');
+    } else {
+      parts.push(fmtBytes(state.downloaded));
+    }
+    if (currentRate > 0) {
+      parts.push(fmtRate(currentRate));
+      if (state.total > 0 && state.downloaded < state.total) {
+        var remaining = state.total - state.downloaded;
+        var eta = remaining / currentRate;
+        var etaStr = fmtEta(eta);
+        if (etaStr) parts.push(etaStr + ' remaining');
+      }
+    }
+    progressLabel.textContent = parts.join('  ·  ');
+  }
+
+  function hideProgress() {
+    progressWrap.classList.remove('visible');
+    progressFill.style.width = '0%';
+    resetRateTracking();
+  }
+
+  function stopPolling() {
+    if (updatePollTimer) {
+      clearInterval(updatePollTimer);
+      updatePollTimer = null;
+    }
+  }
+
+  function pollUpdateStatus() {
+    fetch('/api/update/status')
+      .then(function(r) { return r.json(); })
+      .then(function(state) {
+        switch (state.phase) {
+          case 'checking':
+            setUpdateStatus(state.message || 'Checking...', 'var(--text-muted)');
+            break;
+          case 'downloading':
+            setUpdateStatus(state.message || 'Downloading...', 'var(--text-muted)');
+            updateRate(state.downloaded);
+            showProgress(state);
+            break;
+          case 'verifying':
+            setUpdateStatus(state.message || 'Verifying...', 'var(--text-muted)');
+            // Freeze rate — verify is not a download phase.
+            showProgress(state);
+            break;
+          case 'applied':
+            setUpdateStatus(state.message || 'Installed — restart required.', 'var(--accent)');
+            showProgress(state);
+            stopPolling();
+            checkBtn.disabled = false;
+            applyBtn.style.display = 'none';
+            // Offer a hint: the existing Reboot button does the actual restart.
+            break;
+          case 'error':
+            setUpdateStatus('Error: ' + (state.message || 'unknown'), 'var(--error)');
+            stopPolling();
+            checkBtn.disabled = false;
+            applyBtn.disabled = false;
+            hideProgress();
+            break;
+          case 'idle':
+          default:
+            // Nothing to do — leave whatever the user was looking at.
+            break;
+        }
+      })
+      .catch(function() { /* transient, keep polling */ });
+  }
+
+  // resumeUpdateUI runs once at page load. If the server reports an
+  // in-progress or just-finished update, we reflect that state and start
+  // polling — so hitting F5 during an install doesn't leave the operator
+  // with a blank admin tab.
+  function resumeUpdateUI() {
+    fetch('/api/update/status')
+      .then(function(r) { return r.json(); })
+      .then(function(state) {
+        if (!state || !state.phase || state.phase === 'idle') return;
+        if (state.phase === 'downloading' || state.phase === 'verifying' || state.phase === 'checking') {
+          setUpdateStatus(state.message || 'Update in progress...', 'var(--text-muted)');
+          showProgress(state);
+          checkBtn.disabled = true;
+          applyBtn.disabled = true;
+          stopPolling();
+          updatePollTimer = setInterval(pollUpdateStatus, 500);
+        } else if (state.phase === 'applied') {
+          setUpdateStatus(state.message || 'Installed — restart required.', 'var(--accent)');
+          showProgress(state);
+        } else if (state.phase === 'error') {
+          setUpdateStatus('Last update attempt failed: ' + (state.message || 'unknown'), 'var(--error)');
+        }
+      })
+      .catch(function() { /* not fatal */ });
+  }
+
+  checkBtn.onclick = function() {
+    stopPolling();
+    hideProgress();
+    applyBtn.style.display = 'none';
+    setUpdateStatus('Checking...', 'var(--text-muted)');
+    checkBtn.disabled = true;
+    fetch('/api/update/check', { method: 'POST' })
       .then(function(r) { return r.json(); })
       .then(function(d) {
-        st.textContent = d.ok ? (d.message || 'No update available.') : 'Error: ' + (d.error || 'unknown');
-        st.style.color = d.ok ? 'var(--accent)' : 'var(--error)';
+        if (!d.ok) {
+          setUpdateStatus('Error: ' + (d.error || 'unknown'), 'var(--error)');
+          return;
+        }
+        setUpdateStatus(d.message || '', d.available ? 'var(--accent)' : 'var(--text-muted)');
+        if (d.available) {
+          applyBtn.style.display = '';
+          applyBtn.disabled = false;
+          applyBtn.textContent = 'Install ' + (d.latest_version || 'update');
+        }
       })
-      .catch(function(e) { st.textContent = 'Error: ' + e; st.style.color = 'var(--error)'; })
-      .finally(function() { btn.disabled = false; });
+      .catch(function(e) { setUpdateStatus('Error: ' + e, 'var(--error)'); })
+      .finally(function() { checkBtn.disabled = false; });
+  };
+
+  applyBtn.onclick = function() {
+    if (!confirm('Download and install the update? A restart will be required after install completes.')) return;
+    applyBtn.disabled = true;
+    checkBtn.disabled = true;
+    resetRateTracking();
+    setUpdateStatus('Starting install...', 'var(--text-muted)');
+    showProgress({ downloaded: 0, total: 0 });
+    fetch('/api/update/apply', { method: 'POST' })
+      .then(function(r) { return r.json(); })
+      .then(function(state) {
+        // Kick off polling immediately — the apply goroutine is already running.
+        stopPolling();
+        updatePollTimer = setInterval(pollUpdateStatus, 500);
+        pollUpdateStatus();
+      })
+      .catch(function(e) {
+        setUpdateStatus('Error: ' + e, 'var(--error)');
+        applyBtn.disabled = false;
+        checkBtn.disabled = false;
+      });
   };
 
   document.getElementById('rebootButton').onclick = function() {
@@ -1377,6 +1611,7 @@ body.kiosk-mode { zoom: 2.5; }
   populateLogFilters();
   connect();
   loadConfig();
+  resumeUpdateUI();
 })();
 </script>
 </body>

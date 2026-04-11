@@ -53,12 +53,26 @@ jobs:
           cd ../..
           sha256sum umbgs-linux-arm64 > umbgs-linux-arm64.sha256
 
+      # The .gz asset is a bandwidth optimization for auto-updates: chase
+      # vehicles on one-bar LTE can spend minutes downloading the raw
+      # binary, and gzip -9 on a Go binary typically gives ~60% reduction.
+      # The .sha256 file ABOVE describes the UNCOMPRESSED binary so we
+      # verify what's actually installed on disk, not the transport blob.
+      # The updater decompresses in a streaming io pipeline on the Pi and
+      # falls back to the raw asset if .gz is missing from a release.
+      - name: Compress binary for updates
+        run: |
+          cd ../..
+          gzip -9 -k umbgs-linux-arm64
+          ls -lh umbgs-linux-arm64 umbgs-linux-arm64.gz
+
       - name: Upload artifact
         uses: actions/upload-artifact@v6
         with:
           name: umbgs-linux-arm64
           path: |
             umbgs-linux-arm64
+            umbgs-linux-arm64.gz
             umbgs-linux-arm64.sha256
 
   release:
@@ -79,6 +93,7 @@ jobs:
         with:
           files: |
             umbgs-linux-arm64
+            umbgs-linux-arm64.gz
             umbgs-linux-arm64.sha256
 
   image:
