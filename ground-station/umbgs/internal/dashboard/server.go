@@ -498,7 +498,7 @@ func (s *Server) handleServiceWorker(w http.ResponseWriter, r *http.Request) {
 // that previously cached an older HTML don't keep serving it — the activate
 // handler deletes every cache whose name differs from the current one.
 const serviceWorkerJS = `
-var CACHE = 'umbgs-v3';
+var CACHE = 'umbgs-v4';
 
 self.addEventListener('install', function(e) {
   e.waitUntil(

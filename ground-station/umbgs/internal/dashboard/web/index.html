@@ -705,9 +705,20 @@ body.kiosk-mode { zoom: 2.5; }
   var latestStats = null;
   var configVersion = 0;
 
-  // Register service worker for offline support
+  // Register service worker for offline support. If a new worker takes
+  // control while the page is already open (because we shipped a new
+  // umbgs with a bumped CACHE name), reload once so the user sees the
+  // fresh HTML instead of whatever the old SW cached. Guarded by a flag
+  // to avoid reload loops on navigator.serviceWorker.controller churn.
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('/sw.js').catch(function() {});
+    var swReloading = false;
+    navigator.serviceWorker.addEventListener('controllerchange', function() {
+      if (swReloading) return;
+      swReloading = true;
+      console.log('[sw] controller changed, reloading for fresh HTML');
+      location.reload();
+    });
   }
 
   // Detect Pi kiosk mode via URL parameter set by umbgs when launching cog.
@@ -1599,15 +1610,31 @@ body.kiosk-mode { zoom: 2.5; }
       .finally(function() { checkBtn.disabled = false; });
   };
 
+  // Two-click confirmation instead of window.confirm(): iOS Captive
+  // Network Assistant (the webview that pops when you join our AP
+  // hotspot) silently returns false from confirm() without showing a
+  // dialog, which made the Install button look completely dead. An
+  // inline "click again to confirm" works on every runtime.
+  var applyArmed = false;
+  var applyArmTimer = null;
+  var applyBtnLabel = 'Install Update';
+  function disarmApply() {
+    applyArmed = false;
+    if (applyArmTimer) { clearTimeout(applyArmTimer); applyArmTimer = null; }
+    applyBtn.textContent = applyBtnLabel;
+    applyBtn.classList.remove('btn-danger');
+  }
   applyBtn.onclick = function() {
-    // Log into the browser console so desktop debugging can see it,
-    // and surface every failure mode into updateStatusEl so a phone
-    // operator can diagnose without a console.
-    console.log('[update] install clicked');
-    if (!confirm('Download and install the update? A restart will be required after install completes.')) {
-      console.log('[update] install confirm dismissed');
+    console.log('[update] install clicked, armed=' + applyArmed);
+    if (!applyArmed) {
+      applyArmed = true;
+      applyBtnLabel = applyBtn.textContent;
+      applyBtn.textContent = 'Tap again to confirm';
+      applyBtn.classList.add('btn-danger');
+      applyArmTimer = setTimeout(disarmApply, 5000);
       return;
     }
+    disarmApply();
     applyBtn.disabled = true;
     checkBtn.disabled = true;
     resetRateTracking();
