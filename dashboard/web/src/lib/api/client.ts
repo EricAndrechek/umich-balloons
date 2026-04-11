@@ -35,7 +35,17 @@ async function handle<T>(path: string, res: Response): Promise<T> {
 }
 
 async function get<T>(path: string): Promise<T> {
-	const res = await fetch(apiUrl(path), { headers: authHeaders() });
+	// `cache: 'no-store'` keeps the browser's HTTP cache out of the picture.
+	// Cloudflare rewrites our `Cache-Control: max-age=90` on the wire to the
+	// zone's Browser Cache TTL (4 h default), which would otherwise cause
+	// polling clients to serve stale data from their local cache for hours
+	// after the first successful fetch. The Worker's `caches.default` still
+	// fronts D1 on the origin side — this flag only affects the browser's
+	// own cache, so edge caching is unaffected.
+	const res = await fetch(apiUrl(path), {
+		headers: authHeaders(),
+		cache: 'no-store',
+	});
 	return handle<T>(path, res);
 }
 
@@ -85,9 +95,15 @@ export const api = {
 			`/api/launches/${id}/payloads/${encodeURIComponent(callsign)}/recovered`
 		),
 	dashboard: (id: number) => get<DashboardData>(`/api/launches/${id}/dashboard`),
-	telemetry: (id: number, callsign?: string, limit = 500) => {
-		const params = new URLSearchParams({ limit: String(limit) });
-		if (callsign) params.set('callsign', callsign);
+	telemetry: (
+		id: number,
+		opts: { callsign?: string; since?: number; limit?: number } = {},
+	) => {
+		const params = new URLSearchParams({ limit: String(opts.limit ?? 500) });
+		if (opts.callsign) params.set('callsign', opts.callsign);
+		// `since` is an `id` cursor — strictly monotonic per insert, so the
+		// backend returns exactly the rows written after our last fetch.
+		if (opts.since != null) params.set('since', String(opts.since));
 		return get<TelemetryCache[]>(`/api/launches/${id}/telemetry?${params}`);
 	},
 	leaderboard: (id: number, opts: { balloon?: string; modulation?: string; limit?: number } = {}) => {

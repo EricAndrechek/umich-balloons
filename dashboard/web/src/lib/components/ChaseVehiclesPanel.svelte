@@ -1,18 +1,21 @@
 <script lang="ts">
-	import type { Payload, UploaderStat } from '$lib/types';
+	import type { Payload, TelemetryCache, UploaderStat } from '$lib/types';
 	import { haversine } from '$lib/utils/haversine';
 	import { formatDistance, formatAge, formatCoord } from '$lib/utils/format';
 	import { googleMaps, aprsFi } from '$lib/utils/links';
 	import { clock } from '$lib/stores/clock.svelte';
+	import { computeTrackStats } from '$lib/utils/track';
 
 	let {
 		stations,
 		balloons,
 		uploaderStats,
+		telemetry,
 	}: {
 		stations: Payload[];
 		balloons: Payload[];
 		uploaderStats: UploaderStat[];
+		telemetry: TelemetryCache[];
 	} = $props();
 
 	// Same thresholds as SignalStatus — keep in sync.
@@ -80,6 +83,7 @@
 		station: Payload;
 		status: Status;
 		totalPackets: number;
+		travelledKm: number | null;
 		distances: Array<{
 			callsign: string;
 			distance: number | null;
@@ -96,6 +100,11 @@
 		for (const station of stations) {
 			const s = statsByStation.get(station.callsign);
 			const total = s?.total ?? 0;
+			// Cumulative drive distance across whatever position history we
+			// have cached for this station. Null if we have no history or
+			// never see two positions in a row.
+			const track = telemetry.filter((t) => t.callsign === station.callsign);
+			const travelledKm = computeTrackStats(track).totalKm;
 			const distances = balloons.map((b) => {
 				const packets = s?.byBalloon.get(b.callsign) ?? 0;
 				let distance: number | null = null;
@@ -118,6 +127,7 @@
 				station,
 				status: statusFor(station.last_heard, clock.now),
 				totalPackets: total,
+				travelledKm,
 				distances,
 			});
 		}
@@ -232,6 +242,18 @@
 									</div>
 								{/each}
 							</div>
+						</div>
+					{/if}
+
+					{#if r.travelledKm != null}
+						<div
+							class="mt-2 text-xs text-slate-500"
+							title="Cumulative drive distance across cached position history"
+						>
+							Travelled
+							<span class="tabular-nums font-semibold text-slate-700 dark:text-slate-300"
+								>{formatDistance(r.travelledKm)}</span
+							>
 						</div>
 					{/if}
 

@@ -6,159 +6,232 @@ import type {
   PredictionRow,
   SourceStatRow,
   UploaderStatRow,
+  UploadersHeardRow,
   TelemetryCacheRow,
 } from "../lib/types";
+import { cachedJson, HttpError } from "../lib/cache";
 
 export const dashboardRoutes = new Hono<{ Bindings: Env }>();
+
+// Cache TTL for public read endpoints. Cron runs every 120s, so any value
+// < 120s is strictly safe — clients never see data older than one cron
+// cycle. 90s gets us 4 cache hits for every 1 origin hit at our 20s
+// client poll cadence, which is a ~80% D1 read reduction.
+const PUBLIC_CACHE_TTL = 90;
 
 // Full dashboard data for a launch group (single request for all panels)
 dashboardRoutes.get("/:id/dashboard", async (c) => {
   const id = parseInt(c.req.param("id"));
 
-  const group = await c.env.DB.prepare(
-    "SELECT * FROM launch_groups WHERE id = ?",
-  )
-    .bind(id)
-    .first<LaunchGroupRow>();
-  if (!group) return c.json({ error: "Launch group not found" }, 404);
+  return cachedJson(c, PUBLIC_CACHE_TTL, async () => {
+    const group = await c.env.DB.prepare(
+      "SELECT * FROM launch_groups WHERE id = ?",
+    )
+      .bind(id)
+      .first<LaunchGroupRow>();
+    if (!group) throw new HttpError(404, { error: "Launch group not found" });
 
-  // Fetch all data in parallel. Aggregate counts (source_stats, uploader_stats)
-  // are derived from contacts via GROUP BY rather than maintained incrementally
-  // — guarantees the numbers on the dashboard always match the raw contacts
-  // table regardless of cron edge cases.
-  const [payloads, predictions, sourceStats, uploaderStats, recentTelemetry, maxAltitudes, bestPerUploader] =
-    await Promise.all([
-      c.env.DB.prepare(
-        "SELECT * FROM payloads WHERE launch_group_id = ?",
-      )
-        .bind(id)
-        .all<PayloadRow>(),
+    // All of these are now small, pre-aggregated reads. The previous
+    // implementation did three GROUP BYs over the full contacts table
+    // (source_stats, uploader_stats, bestPerUploader) plus a self-join
+    // on telemetry_cache for latestTelemetry and a GROUP BY for
+    // maxAltitudes — at peak flight each /dashboard cache miss scanned
+    // tens of thousands of rows. After migration 0003 the cron
+    // maintains source_stats / uploader_stats / uploaders_heard
+    // incrementally, and max_alt lives directly on the payload row
+    // alongside last_lat/last_lon/last_alt/last_heard, so per-request
+    // row count drops to ~150. The cache still fronts this endpoint,
+    // so most requests never touch D1 at all; this path now also
+    // stays cheap when the cache is cold.
+    const [payloads, predictions, sourceStats, uploaderStats, uploadersHeard] =
+      await Promise.all([
+        c.env.DB.prepare(
+          "SELECT * FROM payloads WHERE launch_group_id = ?",
+        )
+          .bind(id)
+          .all<PayloadRow>(),
 
-      c.env.DB.prepare(
-        "SELECT * FROM predictions WHERE launch_group_id = ?",
-      )
-        .bind(id)
-        .all<PredictionRow>(),
+        c.env.DB.prepare(
+          "SELECT * FROM predictions WHERE launch_group_id = ?",
+        )
+          .bind(id)
+          .all<PredictionRow>(),
 
-      c.env.DB.prepare(`
-        SELECT
-          launch_group_id,
-          balloon_callsign,
-          COALESCE(modulation, 'unknown') as modulation,
-          COUNT(*) as packet_count
-        FROM contacts
-        WHERE launch_group_id = ?
-        GROUP BY balloon_callsign, modulation
-      `)
-        .bind(id)
-        .all<SourceStatRow>(),
+        c.env.DB.prepare(
+          "SELECT * FROM source_stats WHERE launch_group_id = ?",
+        )
+          .bind(id)
+          .all<SourceStatRow>(),
 
-      c.env.DB.prepare(`
-        SELECT
-          launch_group_id,
-          balloon_callsign,
-          uploader_callsign,
-          COALESCE(modulation, 'unknown') as modulation,
-          COUNT(*) as packet_count
-        FROM contacts
-        WHERE launch_group_id = ?
-        GROUP BY balloon_callsign, uploader_callsign, modulation
-        ORDER BY packet_count DESC
-      `)
-        .bind(id)
-        .all<UploaderStatRow>(),
+        c.env.DB.prepare(
+          `SELECT * FROM uploader_stats
+           WHERE launch_group_id = ?
+           ORDER BY packet_count DESC`,
+        )
+          .bind(id)
+          .all<UploaderStatRow>(),
 
-      // Last telemetry per callsign (for current values display)
-      c.env.DB.prepare(`
-        SELECT tc.* FROM telemetry_cache tc
-        INNER JOIN (
-          SELECT callsign, MAX(timestamp) as max_ts
-          FROM telemetry_cache
-          WHERE launch_group_id = ?
-          GROUP BY callsign
-        ) latest ON tc.callsign = latest.callsign AND tc.timestamp = latest.max_ts
-        WHERE tc.launch_group_id = ?
-      `)
-        .bind(id, id)
-        .all<TelemetryCacheRow>(),
+        // Pre-aggregated "best heard" per uploader. Matches the shape
+        // of what the old GROUP BY returned, NULL-distance rows sorted
+        // last so real contacts always appear first in the list.
+        c.env.DB.prepare(
+          `SELECT * FROM uploaders_heard
+           WHERE launch_group_id = ?
+           ORDER BY (best_distance_km IS NULL), best_distance_km DESC`,
+        )
+          .bind(id)
+          .all<UploadersHeardRow>(),
+      ]);
 
-      // Max altitude per callsign across the whole flight
-      c.env.DB.prepare(
-        "SELECT callsign, MAX(alt) as max_alt FROM telemetry_cache WHERE launch_group_id = ? GROUP BY callsign",
-      )
-        .bind(id)
-        .all<{ callsign: string; max_alt: number | null }>(),
+    const baseCallsigns = JSON.parse(group.base_callsigns) as string[];
 
-      // Best (farthest) contact per uploader, regardless of balloon/modulation.
-      // Includes rows with NULL distance so clients can show "heard" even
-      // when we couldn't compute a position (e.g. no GPS lock on uploader).
-      c.env.DB.prepare(`
-        SELECT uploader_callsign,
-               MAX(distance_km) as best_distance_km,
-               COUNT(*) as contact_count,
-               MAX(contact_time) as last_contact_time
-        FROM contacts
-        WHERE launch_group_id = ?
-        GROUP BY uploader_callsign
-        ORDER BY (best_distance_km IS NULL), best_distance_km DESC
-      `)
-        .bind(id)
-        .all<{
-          uploader_callsign: string;
-          best_distance_km: number | null;
-          contact_count: number;
-          last_contact_time: string;
-        }>(),
-    ]);
+    // latestTelemetry used to be a self-join on telemetry_cache; it's
+    // now synthesised from payload columns (last_lat/lon/alt/heard are
+    // maintained on every telemetry ingest). Clients expect
+    // `TelemetryCacheRow`-shaped rows, so we fill in the missing
+    // metric fields as null — none of the dashboard consumers of
+    // latestTelemetry actually read temp/humidity/batt/etc. off these
+    // records (they use the sparkline series from /telemetry for that),
+    // so this is shape-compatible in practice.
+    const latestTelemetry = payloads.results
+      .filter((p) => p.last_lat != null || p.last_heard != null)
+      .map((p) => ({
+        id: 0,
+        launch_group_id: p.launch_group_id,
+        callsign: p.callsign,
+        timestamp: p.last_heard ?? "",
+        lat: p.last_lat,
+        lon: p.last_lon,
+        alt: p.last_alt,
+        temp: null,
+        pressure: null,
+        humidity: null,
+        batt: null,
+        sats: null,
+        vel_v: null,
+        vel_h: null,
+        heading: null,
+        snr: null,
+        rssi: null,
+        modulation: null,
+        uploader_callsign: null,
+      }));
 
-  const baseCallsigns = JSON.parse(group.base_callsigns) as string[];
+    // maxAltitudes: cached on the payload row itself now.
+    const maxAltitudes = payloads.results.map((p) => ({
+      callsign: p.callsign,
+      max_alt: p.max_alt,
+    }));
 
-  return c.json({
-    group: {
-      ...group,
-      base_callsigns: baseCallsigns,
-      active: !!group.active,
-    },
-    payloads: payloads.results,
-    predictions: predictions.results,
-    sourceStats: sourceStats.results,
-    uploaderStats: uploaderStats.results,
-    latestTelemetry: recentTelemetry.results,
-    maxAltitudes: maxAltitudes.results,
-    uploadersHeard: bestPerUploader.results,
+    return {
+      group: {
+        ...group,
+        base_callsigns: baseCallsigns,
+        active: !!group.active,
+      },
+      payloads: payloads.results,
+      predictions: predictions.results,
+      sourceStats: sourceStats.results,
+      uploaderStats: uploaderStats.results,
+      latestTelemetry,
+      maxAltitudes,
+      uploadersHeard: uploadersHeard.results,
+    };
   });
 });
 
-// Telemetry time series for sparklines
+// Telemetry time series for sparklines.
+//
+// Two modes:
+//
+//  1. Full fetch (no `since` param): returns the newest N rows
+//     ordered oldest → newest. Cached at the edge for PUBLIC_CACHE_TTL
+//     seconds so dashboard clients polling the same URL share the
+//     response instead of each hammering D1 for ~1000 rows.
+//
+//  2. Delta fetch (`since=<id>`): returns every row inserted with
+//     `id > since`, ordered oldest → newest, capped by a safety limit.
+//     The client tracks the max `id` it has seen and uses this for
+//     subsequent polls, turning a 1000-row read into a handful of
+//     rows (usually 0–5). Delta responses are NOT cached — each
+//     client's cursor advances independently so URLs never match.
 dashboardRoutes.get("/:id/telemetry", async (c) => {
   const id = parseInt(c.req.param("id"));
   const callsign = c.req.query("callsign");
+  const sinceRaw = c.req.query("since");
   const limit = parseInt(c.req.query("limit") ?? "500");
 
-  let query: string;
-  let params: unknown[];
+  if (sinceRaw != null) {
+    // Delta path — no caching. Use `id` as the cursor because it's
+    // strictly monotonic by insertion order, whereas `timestamp` can
+    // repeat across multi-igate relays of the same balloon packet.
+    const since = parseInt(sinceRaw);
+    if (!Number.isFinite(since) || since < 0) {
+      return c.json({ error: "invalid since cursor" }, 400);
+    }
 
-  if (callsign) {
-    query = `
-      SELECT * FROM telemetry_cache
-      WHERE launch_group_id = ? AND callsign = ?
-      ORDER BY timestamp ASC
-      LIMIT ?
-    `;
-    params = [id, callsign, limit];
-  } else {
-    query = `
-      SELECT * FROM telemetry_cache
-      WHERE launch_group_id = ?
-      ORDER BY timestamp ASC
-      LIMIT ?
-    `;
-    params = [id, limit];
+    let query: string;
+    let params: unknown[];
+    if (callsign) {
+      query = `
+        SELECT * FROM telemetry_cache
+        WHERE launch_group_id = ? AND callsign = ? AND id > ?
+        ORDER BY timestamp ASC
+        LIMIT ?
+      `;
+      params = [id, callsign, since, limit];
+    } else {
+      query = `
+        SELECT * FROM telemetry_cache
+        WHERE launch_group_id = ? AND id > ?
+        ORDER BY timestamp ASC
+        LIMIT ?
+      `;
+      params = [id, since, limit];
+    }
+
+    const rows = await c.env.DB.prepare(query)
+      .bind(...params)
+      .all<TelemetryCacheRow>();
+    return c.json(rows.results, 200, {
+      "Cache-Control": "no-store",
+      "X-Cache": "BYPASS",
+    });
   }
 
-  const rows = await c.env.DB.prepare(query)
-    .bind(...params)
-    .all<TelemetryCacheRow>();
+  // Full path — cached.
+  return cachedJson(c, PUBLIC_CACHE_TTL, async () => {
+    let query: string;
+    let params: unknown[];
 
-  return c.json(rows.results);
+    // We want the *newest* N rows, but return them oldest → newest so
+    // the client can walk the series in chronological order. A subquery
+    // takes the top N by timestamp DESC, then the outer SELECT flips.
+    if (callsign) {
+      query = `
+        SELECT * FROM (
+          SELECT * FROM telemetry_cache
+          WHERE launch_group_id = ? AND callsign = ?
+          ORDER BY timestamp DESC
+          LIMIT ?
+        ) ORDER BY timestamp ASC
+      `;
+      params = [id, callsign, limit];
+    } else {
+      query = `
+        SELECT * FROM (
+          SELECT * FROM telemetry_cache
+          WHERE launch_group_id = ?
+          ORDER BY timestamp DESC
+          LIMIT ?
+        ) ORDER BY timestamp ASC
+      `;
+      params = [id, limit];
+    }
+
+    const rows = await c.env.DB.prepare(query)
+      .bind(...params)
+      .all<TelemetryCacheRow>();
+    return rows.results;
+  });
 });

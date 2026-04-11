@@ -22,6 +22,13 @@ export interface Payload {
 	last_lon: number | null;
 	last_alt: number | null;
 	last_heard: string | null;
+	// Cached per-payload stats maintained server-side by the cron
+	// (migration 0003). Authoritative across the whole flight regardless
+	// of what the client currently has in its in-memory telemetry buffer,
+	// so BalloonCard can show correct totals after a page refresh or
+	// after the in-memory cap has dropped old points.
+	max_alt: number | null;
+	total_distance_km: number | null;
 }
 
 export interface LaunchGroupWithPayloads extends LaunchGroup {

@@ -32,6 +32,26 @@ export interface PayloadRow {
   last_lon: number | null;
   last_alt: number | null;
   last_heard: string | null;
+  // Added in migration 0003 — cached per-payload stats maintained by the
+  // cron so the dashboard doesn't need to GROUP BY over telemetry_cache
+  // on every request.
+  max_alt: number | null;
+  total_distance_km: number | null;
+  // Cursor for the cron's incremental distance calculation. Not exposed
+  // to the API response, but part of the row shape because the cron
+  // reads it alongside the rest of the payload fields.
+  prev_track_lat: number | null;
+  prev_track_lon: number | null;
+  prev_track_time: string | null;
+}
+
+// Added in migration 0003.
+export interface UploadersHeardRow {
+  launch_group_id: number;
+  uploader_callsign: string;
+  best_distance_km: number | null;
+  contact_count: number;
+  last_contact_time: string | null;
 }
 
 export interface ContactRow {

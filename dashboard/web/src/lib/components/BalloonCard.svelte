@@ -2,8 +2,14 @@
 	import type { Payload, Prediction, TelemetryCache } from '$lib/types';
 	import PhaseBadge from './PhaseBadge.svelte';
 	import Sparkline from './Sparkline.svelte';
-	import { formatAltitude, formatCoord, formatAge, formatDuration } from '$lib/utils/format';
-	import { googleMaps, sondehubTracker, aprsFi } from '$lib/utils/links';
+	import {
+		formatAltitude,
+		formatCoord,
+		formatAge,
+		formatDuration,
+		formatDistance,
+	} from '$lib/utils/format';
+	import { googleMaps, sondehubTracker, aprsFi, grafanaBalloon } from '$lib/utils/links';
 	import { clock } from '$lib/stores/clock.svelte';
 	import {
 		payloadStatus,
@@ -11,23 +17,25 @@
 		statusBorderClass,
 		statusTextClass,
 	} from '$lib/utils/status';
+	import { computeTrackStats } from '$lib/utils/track';
 
 	let {
 		payload,
 		prediction,
 		latest,
 		sparkline,
+		track,
 		maxAlt,
+		groupStartedAt,
 	}: {
 		payload: Payload;
 		prediction?: Prediction;
 		latest?: TelemetryCache;
 		sparkline: TelemetryCache[];
+		track: TelemetryCache[];
 		maxAlt?: number | null;
+		groupStartedAt?: string | null;
 	} = $props();
-
-	const altSeries = $derived(sparkline.map((t) => t.alt));
-	const battSeries = $derived(sparkline.map((t) => t.batt));
 
 	const status = $derived(payloadStatus(payload, clock.now));
 
@@ -50,6 +58,143 @@
 		} catch {
 			return null;
 		}
+	});
+
+	// Telemetry fields we surface as stat cells. Each cell shows the most
+	// recent non-null value (scanning backwards through the sparkline series
+	// so a temporarily missing field doesn't blank out the reading) plus a
+	// mini sparkline of that field over the cached window. Altitude is
+	// special-cased below because it also shows the max-altitude subtitle.
+	type StatKey =
+		| 'temp'
+		| 'pressure'
+		| 'humidity'
+		| 'batt'
+		| 'sats'
+		| 'heading'
+		| 'snr'
+		| 'rssi';
+
+	interface StatDef {
+		key: StatKey;
+		label: string;
+		unit: string;
+		digits: number;
+	}
+
+	// Note: vertical & horizontal rates are NOT in this list — we compute
+	// them ourselves from the track history (see `trackStats` below) since
+	// that's both smoother than the tracker's raw `vel_v`/`vel_h` readings
+	// and honest about what the data actually shows. "Vertical rate" and
+	// "ascent rate" are the same thing — positive = ascending, negative =
+	// descending — so we only surface one cell for it.
+	const STATS: StatDef[] = [
+		{ key: 'temp', label: 'Temp', unit: '°C', digits: 1 },
+		{ key: 'pressure', label: 'Pressure', unit: 'hPa', digits: 0 },
+		{ key: 'humidity', label: 'Humidity', unit: '%', digits: 0 },
+		{ key: 'batt', label: 'Battery', unit: 'V', digits: 2 },
+		{ key: 'sats', label: 'Sats', unit: '', digits: 0 },
+		{ key: 'heading', label: 'Heading', unit: '°', digits: 0 },
+		{ key: 'snr', label: 'SNR', unit: 'dB', digits: 1 },
+		{ key: 'rssi', label: 'RSSI', unit: 'dBm', digits: 0 },
+	];
+
+	// Altitude gets its own cell (with max-alt subtitle), driven off the
+	// sparkline series rather than `payload.last_alt` so its graph and
+	// headline value stay in sync with the rest of the grid.
+	const altValues = $derived(sparkline.map((t) => (t.alt != null ? t.alt : null)));
+	const altLatest = $derived.by(() => {
+		for (let i = altValues.length - 1; i >= 0; i--) {
+			const v = altValues[i];
+			if (v != null && !Number.isNaN(v)) return v;
+		}
+		return payload.last_alt ?? null;
+	});
+
+	interface StatCell {
+		def: StatDef;
+		latest: number | null;
+		values: Array<number | null>;
+		hasAny: boolean;
+	}
+
+	const statCells = $derived.by<StatCell[]>(() => {
+		const cells: StatCell[] = [];
+		for (const def of STATS) {
+			const values = sparkline.map((t) => {
+				const v = t[def.key];
+				return typeof v === 'number' && !Number.isNaN(v) ? v : null;
+			});
+			let latestVal: number | null = null;
+			for (let i = values.length - 1; i >= 0; i--) {
+				if (values[i] != null) {
+					latestVal = values[i];
+					break;
+				}
+			}
+			// Fall back to the explicit `latest` record if the sparkline window
+			// hasn't captured this field yet (e.g. cold load, short history).
+			if (latestVal == null && latest) {
+				const v = latest[def.key];
+				if (typeof v === 'number' && !Number.isNaN(v)) latestVal = v;
+			}
+			const hasAny = values.some((v) => v != null) || latestVal != null;
+			if (!hasAny) continue;
+			cells.push({ def, latest: latestVal, values, hasAny });
+		}
+		return cells;
+	});
+
+	function formatStat(cell: StatCell): string {
+		if (cell.latest == null) return '—';
+		const v = cell.def.digits === 0 ? Math.round(cell.latest) : cell.latest;
+		const num = typeof v === 'number' ? v.toFixed(cell.def.digits) : String(v);
+		return cell.def.unit ? `${num} ${cell.def.unit}` : num;
+	}
+
+	// Computed travel stats — ascent/descent rate, ground speed, and
+	// cumulative path length. Rolling rates are derived from whatever's
+	// currently in memory (they only need a ~2 min window so the in-memory
+	// cap never affects them). Cumulative totals prefer the server-side
+	// authoritative values on the payload row — those are maintained by
+	// the cron across the whole flight and survive page refresh or
+	// in-memory telemetry pruning. During the brief window right after
+	// a fresh deploy (before the cron has backfilled) the server values
+	// can be null; fall back to what we can compute from in-memory track.
+	const trackStats = $derived(computeTrackStats(track));
+
+	// Prefer the server's authoritative total distance. `totalKm` from
+	// the client computation is only used as a fallback when the server
+	// hasn't populated the column yet — otherwise it would silently drift
+	// low once older telemetry ages out of the in-memory buffer on long
+	// flights.
+	const displayTotalKm = $derived(
+		payload.total_distance_km != null ? payload.total_distance_km : trackStats.totalKm,
+	);
+
+	// Server-maintained max altitude takes priority over the prop
+	// (which comes from the legacy dashboard query). Same fallback logic
+	// — either source is null, prefer whichever is non-null; if both
+	// have values, the server's is canonical because it reflects every
+	// sample the cron has ever seen, not just what's in memory now.
+	const displayMaxAlt = $derived(
+		payload.max_alt != null ? payload.max_alt : (maxAlt ?? null),
+	);
+
+	// Absolute-magnitude formatter — direction is indicated by an arrow
+	// glyph in the markup, so the number itself stays unsigned.
+	function formatRate(ms: number | null): string {
+		if (ms == null) return '—';
+		return `${Math.abs(ms).toFixed(1)} m/s`;
+	}
+
+	// Grafana link: covers the full window from when this launch group
+	// started tracking through "now". We re-read clock.now inside the
+	// derivation so the `to` timestamp advances as the flight progresses.
+	const grafanaUrl = $derived.by(() => {
+		if (!groupStartedAt) return null;
+		const to = new Date(clock.now).toISOString();
+		return grafanaBalloon(payload.callsign, groupStartedAt, to);
 	});
 </script>
 
@@ -93,88 +238,146 @@
 		</div>
 	</div>
 
-	<div class="grid grid-cols-2 gap-2 text-sm mb-3">
-		<div>
-			<div class="text-xs text-slate-500">Altitude</div>
-			<div class="font-semibold">{formatAltitude(payload.last_alt)}</div>
-		</div>
-		<div>
-			<div class="text-xs text-slate-500">Max altitude</div>
-			<div class="font-semibold">{formatAltitude(maxAlt)}</div>
-		</div>
-		<div class="col-span-2">
-			<div class="text-xs text-slate-500">Current position</div>
-			{#if payload.last_lat != null && payload.last_lon != null}
-				<a
-					href={googleMaps(payload.last_lat, payload.last_lon)}
-					target="_blank"
-					rel="noopener"
-					class="font-mono text-xs text-blue-600 dark:text-blue-400 hover:underline"
-				>
-					{formatCoord(payload.last_lat)}, {formatCoord(payload.last_lon)} ↗
-				</a>
-			{:else}
-				<div class="font-mono text-xs">—</div>
-			{/if}
-		</div>
-		{#if latest}
-			{#if latest.temp != null}
-				<div>
-					<div class="text-xs text-slate-500">Temperature</div>
-					<div class="font-semibold">{latest.temp.toFixed(1)}°C</div>
-				</div>
-			{/if}
-			{#if latest.batt != null}
-				<div>
-					<div class="text-xs text-slate-500">Battery</div>
-					<div class="font-semibold">{latest.batt.toFixed(2)} V</div>
-				</div>
-			{/if}
-			{#if latest.pressure != null}
-				<div>
-					<div class="text-xs text-slate-500">Pressure</div>
-					<div class="font-semibold">{latest.pressure.toFixed(0)} hPa</div>
-				</div>
-			{/if}
-			{#if latest.humidity != null}
-				<div>
-					<div class="text-xs text-slate-500">Humidity</div>
-					<div class="font-semibold">{latest.humidity.toFixed(0)}%</div>
-				</div>
-			{/if}
-			{#if latest.sats != null}
-				<div>
-					<div class="text-xs text-slate-500">Sats</div>
-					<div class="font-semibold">{latest.sats}</div>
-				</div>
-			{/if}
-			{#if latest.vel_v != null}
-				<div>
-					<div class="text-xs text-slate-500">Vertical vel.</div>
-					<div class="font-semibold">{latest.vel_v.toFixed(1)} m/s</div>
-				</div>
-			{/if}
+	<div class="mb-3">
+		<div class="text-xs text-slate-500">Current position</div>
+		{#if payload.last_lat != null && payload.last_lon != null}
+			<a
+				href={googleMaps(payload.last_lat, payload.last_lon)}
+				target="_blank"
+				rel="noopener"
+				class="font-mono text-xs text-blue-600 dark:text-blue-400 hover:underline"
+			>
+				{formatCoord(payload.last_lat)}, {formatCoord(payload.last_lon)} ↗
+			</a>
+		{:else}
+			<div class="font-mono text-xs">—</div>
 		{/if}
 	</div>
 
-	{#if sparkline.length > 1}
-		<div class="flex items-center gap-4 mb-3 text-xs">
-			<div class="flex items-center gap-2">
-				<span class="text-slate-500">Alt</span>
-				<span class="text-blue-600 dark:text-blue-400">
-					<Sparkline values={altSeries} />
-				</span>
+	<div class="grid grid-cols-2 gap-x-3 gap-y-2 text-sm mb-3">
+		<!-- Altitude is the headline cell: current reading + max subtitle + sparkline -->
+		<div class="col-span-2">
+			<div class="flex items-baseline justify-between gap-2">
+				<div>
+					<div class="text-xs text-slate-500">Altitude</div>
+					<div class="font-semibold">{formatAltitude(altLatest)}</div>
+				</div>
+				{#if displayMaxAlt != null}
+					<div class="text-right">
+						<div class="text-[10px] text-slate-400 uppercase">max</div>
+						<div class="text-xs font-semibold tabular-nums">{formatAltitude(displayMaxAlt)}</div>
+					</div>
+				{/if}
 			</div>
-			{#if battSeries.some((b) => b != null)}
-				<div class="flex items-center gap-2">
-					<span class="text-slate-500">Batt</span>
-					<span class="text-green-600 dark:text-green-400">
-						<Sparkline values={battSeries} />
-					</span>
+			{#if altValues.filter((v) => v != null).length > 1}
+				<div class="text-blue-600 dark:text-blue-400 mt-1">
+					<Sparkline values={altValues} width={280} height={28} />
 				</div>
 			{/if}
 		</div>
-	{/if}
+
+		<!-- Computed rates & total distance. Current value + max + sparkline
+		     per cell; values show "—" when history is too sparse. Max ascent
+		     and max descent are tracked separately since they represent
+		     different phases of flight. -->
+		<div class="col-span-2">
+			<div class="flex items-baseline justify-between gap-2">
+				<div>
+					<div
+						class="text-xs text-slate-500"
+						title="Computed from altitude history over a trailing ~2 minute window"
+					>
+						Ascent rate
+					</div>
+					<div class="font-semibold tabular-nums">
+						{#if trackStats.verticalMS != null}
+							<span
+								class={trackStats.verticalMS >= 0
+									? 'text-blue-600 dark:text-blue-400'
+									: 'text-amber-600 dark:text-amber-400'}
+							>
+								{trackStats.verticalMS >= 0 ? '↑' : '↓'}
+							</span>
+							{formatRate(trackStats.verticalMS)}
+						{:else}
+							—
+						{/if}
+					</div>
+				</div>
+				{#if trackStats.maxAscentMS != null || trackStats.maxDescentMS != null}
+					<div class="text-right">
+						<div class="text-[10px] text-slate-400 uppercase">peak</div>
+						<div class="text-xs font-semibold tabular-nums">
+							{#if trackStats.maxAscentMS != null}
+								<span class="text-blue-600 dark:text-blue-400">↑{trackStats.maxAscentMS.toFixed(1)}</span>
+							{/if}
+							{#if trackStats.maxAscentMS != null && trackStats.maxDescentMS != null}
+								<span class="text-slate-400"> / </span>
+							{/if}
+							{#if trackStats.maxDescentMS != null}
+								<span class="text-amber-600 dark:text-amber-400">↓{trackStats.maxDescentMS.toFixed(1)}</span>
+							{/if}
+							<span class="text-slate-400"> m/s</span>
+						</div>
+					</div>
+				{/if}
+			</div>
+			{#if trackStats.verticalSeries.filter((v) => v != null).length > 1}
+				<div class="text-blue-600 dark:text-blue-400 mt-1">
+					<Sparkline values={trackStats.verticalSeries} width={280} height={22} />
+				</div>
+			{/if}
+		</div>
+
+		<div class="col-span-2">
+			<div class="flex items-baseline justify-between gap-2">
+				<div>
+					<div
+						class="text-xs text-slate-500"
+						title="Computed from position history over a trailing ~2 minute window"
+					>
+						Ground speed
+					</div>
+					<div class="font-semibold tabular-nums">{formatRate(trackStats.horizontalMS)}</div>
+				</div>
+				{#if trackStats.maxGroundMS != null}
+					<div class="text-right">
+						<div class="text-[10px] text-slate-400 uppercase">peak</div>
+						<div class="text-xs font-semibold tabular-nums">
+							{trackStats.maxGroundMS.toFixed(1)} <span class="text-slate-400">m/s</span>
+						</div>
+					</div>
+				{/if}
+			</div>
+			{#if trackStats.horizontalSeries.filter((v) => v != null).length > 1}
+				<div class="text-emerald-600 dark:text-emerald-400 mt-1">
+					<Sparkline values={trackStats.horizontalSeries} width={280} height={22} />
+				</div>
+			{/if}
+		</div>
+
+		<div class="col-span-2">
+			<div
+				class="text-xs text-slate-500"
+				title="Cumulative path length across cached telemetry. Unphysical jumps (bad GPS fixes, session boundaries) are filtered out."
+			>
+				Distance travelled
+			</div>
+			<div class="font-semibold tabular-nums">{formatDistance(displayTotalKm)}</div>
+		</div>
+
+		{#each statCells as cell (cell.def.key)}
+			<div>
+				<div class="text-xs text-slate-500">{cell.def.label}</div>
+				<div class="font-semibold tabular-nums">{formatStat(cell)}</div>
+				{#if cell.values.filter((v) => v != null).length > 1}
+					<div class="text-slate-500 dark:text-slate-400">
+						<Sparkline values={cell.values} width={130} height={18} />
+					</div>
+				{/if}
+			</div>
+		{/each}
+	</div>
 
 	{#if prediction}
 		<div class="border-t border-slate-200 dark:border-slate-800 pt-3 mb-3">
@@ -259,5 +462,15 @@
 		>
 			aprs.fi
 		</a>
+		{#if grafanaUrl}
+			<a
+				href={grafanaUrl}
+				target="_blank"
+				rel="noopener"
+				class="px-2 py-1 rounded border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800"
+			>
+				Grafana
+			</a>
+		{/if}
 	</div>
 </div>

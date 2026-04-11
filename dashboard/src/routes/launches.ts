@@ -153,11 +153,26 @@ launchRoutes.post("/:id/reset", async (c) => {
     c.env.DB.prepare("DELETE FROM contacts WHERE launch_group_id = ?").bind(id),
     c.env.DB.prepare("DELETE FROM uploader_stats WHERE launch_group_id = ?").bind(id),
     c.env.DB.prepare("DELETE FROM source_stats WHERE launch_group_id = ?").bind(id),
+    c.env.DB.prepare("DELETE FROM uploaders_heard WHERE launch_group_id = ?").bind(id),
     c.env.DB.prepare("DELETE FROM telemetry_cache WHERE launch_group_id = ?").bind(id),
     c.env.DB.prepare("DELETE FROM predictions WHERE launch_group_id = ?").bind(id),
     c.env.DB.prepare("DELETE FROM cron_state WHERE launch_group_id = ?").bind(id),
+    // Wipe cached per-payload stats alongside the live-position fields.
+    // Leaving these non-null after a reset would make the dashboard
+    // show stale max_alt / total_distance_km from the previous run.
     c.env.DB.prepare(
-      "UPDATE payloads SET phase = 'pre-launch', launched_at = NULL, burst_altitude = NULL, recovered = 0, last_lat = NULL, last_lon = NULL, last_alt = NULL, last_heard = NULL WHERE launch_group_id = ?",
+      `UPDATE payloads SET
+         phase = 'pre-launch',
+         launched_at = NULL,
+         burst_altitude = NULL,
+         recovered = 0,
+         last_lat = NULL, last_lon = NULL, last_alt = NULL, last_heard = NULL,
+         max_alt = NULL,
+         total_distance_km = NULL,
+         prev_track_lat = NULL,
+         prev_track_lon = NULL,
+         prev_track_time = NULL
+       WHERE launch_group_id = ?`,
     ).bind(id),
   ]);
 
@@ -202,6 +217,7 @@ launchRoutes.delete("/:id", async (c) => {
     c.env.DB.prepare("DELETE FROM contacts WHERE launch_group_id = ?").bind(id),
     c.env.DB.prepare("DELETE FROM uploader_stats WHERE launch_group_id = ?").bind(id),
     c.env.DB.prepare("DELETE FROM source_stats WHERE launch_group_id = ?").bind(id),
+    c.env.DB.prepare("DELETE FROM uploaders_heard WHERE launch_group_id = ?").bind(id),
     c.env.DB.prepare("DELETE FROM telemetry_cache WHERE launch_group_id = ?").bind(id),
     c.env.DB.prepare("DELETE FROM predictions WHERE launch_group_id = ?").bind(id),
     c.env.DB.prepare("DELETE FROM cron_state WHERE launch_group_id = ?").bind(id),

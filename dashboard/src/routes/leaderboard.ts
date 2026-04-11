@@ -1,7 +1,12 @@
 import { Hono } from "hono";
 import type { Env, ContactRow } from "../lib/types";
+import { cachedJson } from "../lib/cache";
 
 export const leaderboardRoutes = new Hono<{ Bindings: Env }>();
+
+// Same TTL rationale as the dashboard routes — contacts only grow when
+// the cron runs, so edge-caching for < cron interval is honest.
+const PUBLIC_CACHE_TTL = 90;
 
 // Leaderboard: farthest contacts, sortable by balloon/modulation
 leaderboardRoutes.get("/:id/leaderboard", async (c) => {
@@ -9,6 +14,8 @@ leaderboardRoutes.get("/:id/leaderboard", async (c) => {
   const balloonCallsign = c.req.query("balloon");
   const modulation = c.req.query("modulation");
   const limit = parseInt(c.req.query("limit") ?? "50");
+
+  return cachedJson(c, PUBLIC_CACHE_TTL, async () => {
 
   // Build the query dynamically based on filters.
   // We want each uploader's BEST contact (max distance) within the filter scope,
@@ -55,27 +62,28 @@ leaderboardRoutes.get("/:id/leaderboard", async (c) => {
     LIMIT ?${paramIdx}
   `;
 
-  const rows = await c.env.DB.prepare(query)
-    .bind(...bindings)
-    .all<ContactRow>();
-
-  return c.json(rows.results);
+    const rows = await c.env.DB.prepare(query)
+      .bind(...bindings)
+      .all<ContactRow>();
+    return rows.results;
+  });
 });
 
 // Competition stats: who heard what, how much, by what method
 leaderboardRoutes.get("/:id/competition", async (c) => {
   const id = parseInt(c.req.param("id"));
 
-  const rows = await c.env.DB.prepare(`
-    SELECT uploader_callsign, balloon_callsign, modulation,
-           SUM(packet_count) as total_packets
-    FROM uploader_stats
-    WHERE launch_group_id = ?
-    GROUP BY uploader_callsign, balloon_callsign, modulation
-    ORDER BY total_packets DESC
-  `)
-    .bind(id)
-    .all();
-
-  return c.json(rows.results);
+  return cachedJson(c, PUBLIC_CACHE_TTL, async () => {
+    const rows = await c.env.DB.prepare(`
+      SELECT uploader_callsign, balloon_callsign, modulation,
+             SUM(packet_count) as total_packets
+      FROM uploader_stats
+      WHERE launch_group_id = ?
+      GROUP BY uploader_callsign, balloon_callsign, modulation
+      ORDER BY total_packets DESC
+    `)
+      .bind(id)
+      .all();
+    return rows.results;
+  });
 });

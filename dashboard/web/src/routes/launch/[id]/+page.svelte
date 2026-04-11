@@ -16,40 +16,141 @@
 
 	const id = $derived(parseInt(page.params.id ?? '0'));
 
+	// Poll cadence (ms). 20s aligns with the 120s cron interval (6 polls
+	// per cron cycle) and is well inside the edge-cache TTL so most polls
+	// hit cache instead of D1.
+	const POLL_INTERVAL_MS = 20_000;
+
+	// If the tab is hidden longer than this, we can't trust the in-memory
+	// delta cursor — the row count between `since` and now may exceed the
+	// delta response's safety limit, and timestamps may have lapsed
+	// further than the server cares to remember. Force a full refetch on
+	// resume instead of risking a silent gap.
+	const STALE_RESUME_MS = 60_000;
+
+	// Cap the in-memory telemetry series so it can't grow unbounded over
+	// a multi-hour flight. 10000 points is a comfortable ceiling for the
+	// raw in-memory track even on an all-day flight with multiple balloons
+	// beaconing fast; the headline totals (max_alt, total_distance_km)
+	// come from server-side cached columns on the payload row and so
+	// survive any pruning here.
+	const MAX_TELEMETRY_POINTS = 10000;
+
 	let data = $state<DashboardData | null>(null);
 	let telemetry = $state<TelemetryCache[]>([]);
 	let leaderboard = $state<Contact[]>([]);
 	let loading = $state(true);
 	let error = $state<string | null>(null);
 	let lastRefresh = $state<string | null>(null);
+	// ms timestamp of the most recent successful refresh — distinct from
+	// `lastRefresh` (ISO, used only for the "last updated" display) so we
+	// can compute resume staleness without reparsing.
+	let lastRefreshMs = $state(0);
+	// Cursor for delta telemetry fetches — the largest `id` we've seen.
+	// `null` means "next fetch is a full fetch" (cold start, post-error,
+	// post-long-hidden).
+	let telemetryCursor: number | null = null;
 	let refreshTimer: ReturnType<typeof setInterval> | null = null;
+	let inFlight = false;
 
-	async function refresh() {
+	async function refresh({ force = false }: { force?: boolean } = {}) {
+		// Guard against overlapping fetches — if the network is slow and
+		// the poll timer fires while the previous request is still in
+		// flight, drop the new tick instead of piling on.
+		if (inFlight) return;
+		inFlight = true;
 		try {
+			const needFull = force || telemetryCursor == null;
+			const telemetryPromise = needFull
+				? api.telemetry(id, { limit: 1000 })
+				: api.telemetry(id, { since: telemetryCursor!, limit: 1000 });
+
 			const [d, t, lb] = await Promise.all([
 				api.dashboard(id),
-				api.telemetry(id, undefined, 1000),
+				telemetryPromise,
 				api.leaderboard(id, { limit: 20 }),
 			]);
 			data = d;
-			telemetry = t;
+
+			if (needFull) {
+				telemetry = t;
+			} else if (t.length > 0) {
+				// Append delta and re-sort by timestamp. Server already
+				// orders delta by timestamp ASC, but on edge cases
+				// (late-arriving records inserted out of order relative
+				// to the tail we already have) a re-sort is cheap
+				// insurance. ISO-8601 strings sort chronologically.
+				const merged = telemetry.concat(t);
+				merged.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+				telemetry =
+					merged.length > MAX_TELEMETRY_POINTS
+						? merged.slice(-MAX_TELEMETRY_POINTS)
+						: merged;
+			}
+
+			// Advance cursor to the max `id` in our current view, covering
+			// both the full-fetch and delta-fetch cases in one sweep.
+			let maxId = telemetryCursor ?? 0;
+			for (const row of telemetry) {
+				if (row.id > maxId) maxId = row.id;
+			}
+			telemetryCursor = maxId;
+
 			leaderboard = lb;
 			lastRefresh = new Date().toISOString();
+			lastRefreshMs = Date.now();
 			error = null;
 		} catch (err) {
 			error = err instanceof Error ? err.message : String(err);
+			// On failure, drop the cursor so the next attempt does a
+			// full refetch. Cheaper than risking a silent gap if the
+			// error was caused by a cursor the server no longer honors.
+			telemetryCursor = null;
 		} finally {
+			inFlight = false;
 			loading = false;
 		}
 	}
 
+	function startPolling() {
+		if (refreshTimer != null) return;
+		refreshTimer = setInterval(() => refresh(), POLL_INTERVAL_MS);
+	}
+
+	function stopPolling() {
+		if (refreshTimer != null) {
+			clearInterval(refreshTimer);
+			refreshTimer = null;
+		}
+	}
+
+	function handleVisibility() {
+		if (document.hidden) {
+			// Pause polling entirely — a hidden tab has no reason to
+			// consume Worker requests, D1 reads, cellular data, or
+			// phone battery.
+			stopPolling();
+		} else {
+			// Resume. If we've been hidden long enough that our delta
+			// cursor is untrustworthy, force a full refetch so we don't
+			// silently miss rows. Then restart the interval.
+			const idleMs = Date.now() - lastRefreshMs;
+			refresh({ force: idleMs > STALE_RESUME_MS });
+			startPolling();
+		}
+	}
+
 	onMount(() => {
-		refresh();
-		refreshTimer = setInterval(refresh, 15_000);
+		refresh({ force: true });
+		startPolling();
+		document.addEventListener('visibilitychange', handleVisibility);
 	});
 
 	onDestroy(() => {
-		if (refreshTimer) clearInterval(refreshTimer);
+		stopPolling();
+		if (typeof document !== 'undefined') {
+			document.removeEventListener('visibilitychange', handleVisibility);
+		}
 	});
 
 	const balloons = $derived(data?.payloads.filter((p) => p.type === 'balloon') ?? []);
@@ -88,6 +189,13 @@
 
 	function sparklineFor(callsign: string): TelemetryCache[] {
 		return telemetry.filter((t) => t.callsign === callsign).slice(-50);
+	}
+
+	// Full (unsliced) track for a callsign — used for computed rates and
+	// cumulative distance totals where we want every sample we have, not
+	// just the recent sparkline window.
+	function trackFor(callsign: string): TelemetryCache[] {
+		return telemetry.filter((t) => t.callsign === callsign);
 	}
 </script>
 
@@ -142,7 +250,9 @@
 						prediction={predictionFor(b.callsign)}
 						latest={latestFor(b.callsign)}
 						sparkline={sparklineFor(b.callsign)}
+						track={trackFor(b.callsign)}
 						maxAlt={maxAltFor(b.callsign)}
+						groupStartedAt={data.group.started_at}
 					/>
 				{/each}
 			</div>
@@ -153,6 +263,7 @@
 		stations={stations}
 		balloons={balloons}
 		uploaderStats={data.uploaderStats}
+		telemetry={telemetry}
 	/>
 
 	{#if unknowns.length > 0}
@@ -169,7 +280,9 @@
 						prediction={predictionFor(u.callsign)}
 						latest={latestFor(u.callsign)}
 						sparkline={sparklineFor(u.callsign)}
+						track={trackFor(u.callsign)}
 						maxAlt={maxAltFor(u.callsign)}
+						groupStartedAt={data.group.started_at}
 					/>
 				{/each}
 			</div>
