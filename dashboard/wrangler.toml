@@ -1,0 +1,36 @@
+name = "umich-balloons-dashboard"
+main = "src/index.ts"
+compatibility_date = "2026-04-05"
+
+# Static Assets binding: the SvelteKit SPA build directory.
+# Assets are served by the edge before the Worker runs; unmatched paths fall
+# through to the Worker (for /api/*, /health), and unmatched paths inside the
+# SPA (e.g. /launch/123) are rewritten to index.html for client-side routing.
+[assets]
+directory = "./web/build"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+
+# Custom domain — apex only. www.umich-balloons.com is handled by a
+# Cloudflare bulk redirect rule (www -> apex 301), configured in the dashboard.
+[[routes]]
+pattern = "umich-balloons.com"
+custom_domain = true
+
+[observability]
+[observability.logs]
+enabled = true
+invocation_logs = true
+
+[vars]
+SONDEHUB_API_URL = "https://api.v2.sondehub.org"
+
+# Cron trigger: every 2 minutes
+[triggers]
+crons = ["*/2 * * * *"]
+
+# D1 database binding — database_id gets filled in after `wrangler d1 create`
+[[d1_databases]]
+binding = "DB"
+database_name = "dashboard-db"
+database_id = "557ba409-fc3a-4da0-9f1e-6442ba70fed6"

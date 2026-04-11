@@ -1,14 +1,9 @@
-**/.DS_Store
-**/.vscode
-**/*.pyc
-**/.venv
-**/venv
-**/__pycache__
-**/rtl-sdr.rules
-**/.next
-**/node_modules
-**/package-lock.json
-**/*.log
-**/*.db
-**/.test_state.json
-# **/.env
+node_modules/
+.wrangler/
+.dev.vars
+.env
+.env.local
+dist/
+web/build/
+web/.svelte-kit/
+brand/*.psd
