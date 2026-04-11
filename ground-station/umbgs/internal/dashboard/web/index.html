@@ -751,9 +751,23 @@ body.kiosk-mode { zoom: 2.5; }
   function hideOverlay() { overlay.classList.remove('visible'); }
 
   // --- WebSocket ---
+  // Mobile browsers aggressively throttle JS when a tab is backgrounded:
+  // setTimeout callbacks may be delayed by tens of seconds, and a socket
+  // that died while the tab was asleep can take a long time to get noticed
+  // through the reconnect loop alone. To keep the "Reconnecting..." overlay
+  // from sticking on phones that lock their screen mid-install, we wire up
+  // a visibilitychange handler below that forces a fresh connect the moment
+  // the tab is visible again.
   function connect() {
+    clearTimeout(reconnTimer);
     var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    ws = new WebSocket(proto + '//' + location.host + '/ws');
+    try {
+      ws = new WebSocket(proto + '//' + location.host + '/ws');
+    } catch (e) {
+      console.error('[ws] construct failed', e);
+      reconnTimer = setTimeout(connect, RECONNECT_DELAY);
+      return;
+    }
     ws.onopen = function() {
       clearTimeout(reconnTimer);
       hideOverlay();
@@ -772,6 +786,20 @@ body.kiosk-mode { zoom: 2.5; }
     ws.onerror = function() { if (ws) ws.close(); };
     ws.onmessage = function(e) { try { handleMsg(JSON.parse(e.data)); } catch(err) { console.error('WS:', err); } };
   }
+
+  // Kick the reconnect loop when the tab becomes visible. Covers the
+  // "unlocked my phone and the 'Reconnecting...' overlay is still up"
+  // case: the old WebSocket is almost certainly dead (the OS closed the
+  // TCP session while the tab was asleep) but onclose may not fire until
+  // we poke it. Closing explicitly drops us into the reconnect timer.
+  document.addEventListener('visibilitychange', function() {
+    if (document.visibilityState !== 'visible') return;
+    if (!ws || ws.readyState === WebSocket.OPEN) return;
+    console.log('[ws] visibility reconnect', ws && ws.readyState);
+    try { if (ws) ws.close(); } catch (_) {}
+    clearTimeout(reconnTimer);
+    connect();
+  });
 
   function handleMsg(msg) {
     switch(msg.type) {
@@ -1509,12 +1537,15 @@ body.kiosk-mode { zoom: 2.5; }
   // resumeUpdateUI runs once at page load. If the server reports an
   // in-progress or just-finished update, we reflect that state and start
   // polling — so hitting F5 during an install doesn't leave the operator
-  // with a blank admin tab.
+  // with a blank admin tab. It also restores the "Install" button if a
+  // previous Check found an update available: the server persists that
+  // result in State.Available so a page reload doesn't require another
+  // round-trip to GitHub.
   function resumeUpdateUI() {
     fetch('/api/update/status')
       .then(function(r) { return r.json(); })
       .then(function(state) {
-        if (!state || !state.phase || state.phase === 'idle') return;
+        if (!state) return;
         if (state.phase === 'downloading' || state.phase === 'verifying' || state.phase === 'checking') {
           setUpdateStatus(state.message || 'Update in progress...', 'var(--text-muted)');
           showProgress(state);
@@ -1522,11 +1553,23 @@ body.kiosk-mode { zoom: 2.5; }
           applyBtn.disabled = true;
           stopPolling();
           updatePollTimer = setInterval(pollUpdateStatus, 500);
-        } else if (state.phase === 'applied') {
+          return;
+        }
+        if (state.phase === 'applied') {
           setUpdateStatus(state.message || 'Installed — restart required.', 'var(--accent)');
           showProgress(state);
-        } else if (state.phase === 'error') {
+          return;
+        }
+        if (state.phase === 'error') {
           setUpdateStatus('Last update attempt failed: ' + (state.message || 'unknown'), 'var(--error)');
+          // Fall through so we still show the Install button if
+          // Available was populated before the error.
+        }
+        if (state.available && state.latest_version) {
+          setUpdateStatus('Update available: ' + state.latest_version, 'var(--accent)');
+          applyBtn.style.display = '';
+          applyBtn.disabled = false;
+          applyBtn.textContent = 'Install ' + state.latest_version;
         }
       })
       .catch(function() { /* not fatal */ });
@@ -1557,24 +1600,44 @@ body.kiosk-mode { zoom: 2.5; }
   };
 
   applyBtn.onclick = function() {
-    if (!confirm('Download and install the update? A restart will be required after install completes.')) return;
+    // Log into the browser console so desktop debugging can see it,
+    // and surface every failure mode into updateStatusEl so a phone
+    // operator can diagnose without a console.
+    console.log('[update] install clicked');
+    if (!confirm('Download and install the update? A restart will be required after install completes.')) {
+      console.log('[update] install confirm dismissed');
+      return;
+    }
     applyBtn.disabled = true;
     checkBtn.disabled = true;
     resetRateTracking();
     setUpdateStatus('Starting install...', 'var(--text-muted)');
     showProgress({ downloaded: 0, total: 0 });
+    console.log('[update] POST /api/update/apply');
     fetch('/api/update/apply', { method: 'POST' })
-      .then(function(r) { return r.json(); })
+      .then(function(r) {
+        console.log('[update] apply response', r.status);
+        if (!r.ok) {
+          // Propagate non-2xx so the .catch runs with a useful message.
+          return r.text().then(function(body) {
+            throw new Error('HTTP ' + r.status + ': ' + (body || r.statusText));
+          });
+        }
+        return r.json();
+      })
       .then(function(state) {
+        console.log('[update] apply kicked off', state);
         // Kick off polling immediately — the apply goroutine is already running.
         stopPolling();
         updatePollTimer = setInterval(pollUpdateStatus, 500);
         pollUpdateStatus();
       })
       .catch(function(e) {
-        setUpdateStatus('Error: ' + e, 'var(--error)');
+        console.error('[update] apply failed', e);
+        setUpdateStatus('Error: ' + (e && e.message ? e.message : e), 'var(--error)');
         applyBtn.disabled = false;
         checkBtn.disabled = false;
+        hideProgress();
       });
   };
 

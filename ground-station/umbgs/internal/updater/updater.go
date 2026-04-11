@@ -109,6 +109,11 @@ const (
 )
 
 // State is the snapshot returned by State(). Safe to marshal as JSON.
+//
+// Available + LastCheckedAt persist the most recent Check() result so the
+// dashboard can offer an "Install" button on page reload without forcing
+// the operator to hit Check again. They live alongside the Apply progress
+// fields because they're all read by the same /api/update/status poll.
 type State struct {
 	Phase          Phase     `json:"phase"`
 	Message        string    `json:"message"`
@@ -117,6 +122,11 @@ type State struct {
 	Downloaded     int64     `json:"downloaded"`
 	Total          int64     `json:"total"`
 	UpdatedAt      time.Time `json:"updated_at"`
+	// Available is true if the most recent Check() found an installable
+	// update. Survives until the next Check() overwrites it or an Apply
+	// succeeds (which clears it by transitioning to PhaseApplied).
+	Available     bool      `json:"available"`
+	LastCheckedAt time.Time `json:"last_checked_at"`
 }
 
 // CheckResult is the synchronous answer to "is there an update available?"
@@ -310,6 +320,19 @@ func (u *Updater) Run(ctx context.Context) error {
 		u.logger.Info("boot confirmed healthy, pending marker cleared")
 	}
 
+	// Opportunistic auto-check: run one Check right after the boot is
+	// confirmed healthy so the dashboard can show "update available"
+	// without waiting for an operator to hit the button. Failures are
+	// non-fatal (no network, GitHub rate-limited, etc.) — the manual
+	// Check button is still available.
+	go func() {
+		checkCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		if _, err := u.Check(checkCtx); err != nil {
+			u.logger.Debug("startup update check failed", "error", err)
+		}
+	}()
+
 	u.logger.Info("updater ready, waiting for manual trigger")
 	<-ctx.Done()
 	return ctx.Err()
@@ -327,12 +350,13 @@ func (u *Updater) Run(ctx context.Context) error {
 // so that the dashboard never offers an "Install" button for a broken
 // release.
 //
-// Check deliberately does NOT touch State(). Only Apply writes state —
-// otherwise a Check running concurrently with an Apply would clobber the
-// in-progress download's progress (e.g., another tab clicking "Check"
-// during your install would reset phase from "downloading" back to
-// "checking"). The Check result is returned directly to the caller; the
-// dashboard renders it from the HTTP response.
+// Check writes its result into State so it persists across dashboard
+// page reloads (so a refresh after "update available" still shows the
+// Install button without forcing another round-trip to GitHub). The
+// write is narrowly scoped — Check only touches Available, LatestVersion
+// and LastCheckedAt, and only when Phase is idle/error/applied. While
+// an Apply is actively downloading/verifying we skip the state write so
+// a concurrent Check from another tab can't reset the progress bar.
 func (u *Updater) Check(ctx context.Context) (CheckResult, error) {
 	c := u.cfg.Get()
 	channel := c.Update.Channel
@@ -351,6 +375,7 @@ func (u *Updater) Check(ctx context.Context) (CheckResult, error) {
 	if release == nil {
 		result.Message = "No releases published yet"
 		u.logger.Info("no releases available")
+		u.recordCheckResult(result)
 		return result, nil
 	}
 
@@ -362,6 +387,7 @@ func (u *Updater) Check(ctx context.Context) (CheckResult, error) {
 	if release.TagName == u.version {
 		result.Message = "Already up to date (" + u.version + ")"
 		u.logger.Info("already up to date", "version", u.version)
+		u.recordCheckResult(result)
 		return result, nil
 	}
 
@@ -377,7 +403,30 @@ func (u *Updater) Check(ctx context.Context) (CheckResult, error) {
 	result.Message = "Update available: " + release.TagName
 	u.logger.Info("update available",
 		"current", u.version, "latest", release.TagName)
+	u.recordCheckResult(result)
 	return result, nil
+}
+
+// recordCheckResult folds the latest Check outcome into State so the
+// dashboard can show the Install button across page reloads without
+// re-calling Check. It is deliberately narrow: it only writes Available,
+// LatestVersion and LastCheckedAt, and only when Phase is idle (i.e. no
+// Apply is in progress). That way two tabs clicking Check don't race with
+// an Apply's progress bar, and a successful Apply's PhaseApplied state
+// isn't reverted by a stale Check write.
+func (u *Updater) recordCheckResult(r CheckResult) {
+	u.setState(func(s *State) {
+		// Empty phase = zero-value Updater (happens in tests that
+		// construct the struct directly instead of going through
+		// NewUpdater). Treat it as idle so the first Check after
+		// construction still persists.
+		if s.Phase != "" && s.Phase != PhaseIdle && s.Phase != PhaseError && s.Phase != PhaseApplied {
+			return
+		}
+		s.Available = r.Available
+		s.LatestVersion = r.LatestVersion
+		s.LastCheckedAt = time.Now()
+	})
 }
 
 // Apply downloads the latest release and installs it into the inactive
@@ -468,6 +517,10 @@ func (u *Updater) Apply(ctx context.Context) error {
 	u.setState(func(s *State) {
 		s.Phase = PhaseApplied
 		s.Message = "Installed " + release.TagName + " — restart required"
+		// Clear Available: we just installed it, so the "offer an
+		// Install button" signal no longer applies. Next Check after
+		// reboot will re-populate if a newer release exists.
+		s.Available = false
 	})
 	u.logger.Info("update applied, will take effect on next restart",
 		"version", release.TagName)

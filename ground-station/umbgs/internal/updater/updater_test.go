@@ -225,6 +225,57 @@ func TestCheck_UpdateAvailable(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "umbgs-b")); !os.IsNotExist(err) {
 		t.Errorf("slot b should not exist after Check, got err=%v", err)
 	}
+
+	// The check result must be persisted into State so a dashboard
+	// page reload can render "update available" without re-calling
+	// Check. See recordCheckResult in updater.go.
+	st := u.State()
+	if !st.Available {
+		t.Errorf("State.Available = false, want true after Check found update")
+	}
+	if st.LatestVersion != "v0.0.2" {
+		t.Errorf("State.LatestVersion = %q, want v0.0.2", st.LatestVersion)
+	}
+	if st.LastCheckedAt.IsZero() {
+		t.Errorf("State.LastCheckedAt not set")
+	}
+}
+
+// TestCheck_DoesNotClobberInProgressApply guards the invariant that a
+// Check call during an active Apply cannot reset the progress bar. If
+// this test fails, two dashboard tabs clicking "Check" during an
+// install would visibly roll the "Downloading... 42%" indicator back
+// to zero.
+func TestCheck_DoesNotClobberInProgressApply(t *testing.T) {
+	srv, _ := newMockGitHub(t)
+	defer srv.Close()
+
+	u, _ := newTestUpdater(t, srv.URL)
+
+	// Simulate an Apply mid-download: set phase=downloading with a
+	// populated progress state.
+	u.setState(func(s *State) {
+		s.Phase = PhaseDownloading
+		s.Message = "Downloading v0.0.2..."
+		s.Total = 1000
+		s.Downloaded = 420
+		s.LatestVersion = "v0.0.2"
+	})
+
+	if _, err := u.Check(context.Background()); err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+
+	st := u.State()
+	if st.Phase != PhaseDownloading {
+		t.Errorf("Phase = %q, want %q — Check clobbered in-progress Apply", st.Phase, PhaseDownloading)
+	}
+	if st.Downloaded != 420 {
+		t.Errorf("Downloaded = %d, want 420 — Check reset the progress counter", st.Downloaded)
+	}
+	if st.Total != 1000 {
+		t.Errorf("Total = %d, want 1000", st.Total)
+	}
 }
 
 // TestApply_HappyPath exercises the whole install flow: Apply fetches

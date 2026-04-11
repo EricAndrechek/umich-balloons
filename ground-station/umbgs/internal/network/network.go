@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/godbus/dbus/v5"
@@ -56,6 +57,14 @@ func (m *Manager) Run(ctx context.Context) error {
 	if err := m.ensureAPFirewall(); err != nil {
 		m.logger.Warn("AP firewall rules failed", "error", err)
 	}
+
+	// Emit a one-shot captive portal health report to the log. This is
+	// load-bearing for field debugging: the operator's only view into the
+	// Pi is the dashboard logs, and "captive portal isn't popping up" has
+	// a handful of distinct failure modes (missing drop-in, dnsmasq not
+	// running, dnsmasq running without our config, etc) that each need a
+	// different fix.
+	m.logCaptivePortalHealth()
 
 	// Re-sync periodically in case config changes
 	ticker := time.NewTicker(5 * time.Minute)
@@ -312,6 +321,66 @@ func (m *Manager) ensureCaptivePortalDNS() error {
 		"path", dnsmasqDropInPath,
 		"note", "takes effect on next AP activation or reboot")
 	return nil
+}
+
+// logCaptivePortalHealth emits a diagnostic line about the captive
+// portal's runtime state. Not authoritative — just enough signal to
+// triage a "portal isn't popping up on my phone" report from the field
+// logs view without SSHing into the Pi.
+//
+// We check three things:
+//
+//  1. The drop-in file exists on disk where NM's shared-mode dnsmasq
+//     expects it. install.sh seeds this at image build time, and
+//     ensureCaptivePortalDNS() writes it at every startup as a safety
+//     net, so by the time we're called it should always be present.
+//     If it's missing, something external clobbered it.
+//
+//  2. A dnsmasq process is running. NM spawns its own dnsmasq per
+//     shared-mode connection, so "no dnsmasq" while the hotspot is up
+//     means either NM's shared mode fell back to the internal server
+//     (no dnsmasq-base installed?) or the hotspot isn't actually
+//     active.
+//
+//  3. If dnsmasq IS running, check whether its cmdline mentions our
+//     drop-in file. If not, dnsmasq was spawned before the drop-in
+//     existed — the file won't take effect until the hotspot is
+//     deactivated/reactivated, which is the main thing that can go
+//     wrong even when the file exists.
+func (m *Manager) logCaptivePortalHealth() {
+	dropInOK := false
+	if _, err := os.Stat(dnsmasqDropInPath); err == nil {
+		dropInOK = true
+	}
+
+	// pgrep -a dnsmasq: prints "<pid> <full cmdline>" per matching
+	// process. -a is on Debian's procps by default; if it's missing on
+	// an odd distro the command fails and we fall through.
+	cmdlines, err := exec.Command("pgrep", "-a", "dnsmasq").Output()
+	if err != nil {
+		m.logger.Warn("captive portal health: no dnsmasq process found",
+			"dropin_present", dropInOK,
+			"dropin_path", dnsmasqDropInPath,
+			"hint", "AP hotspot may not be active yet; revisit after hotspot activation")
+		return
+	}
+
+	output := strings.TrimSpace(string(cmdlines))
+	dropInActive := strings.Contains(output, dnsmasqDropInPath) ||
+		strings.Contains(output, "dnsmasq-shared.d")
+
+	if dropInOK && dropInActive {
+		m.logger.Info("captive portal health: OK",
+			"dropin_path", dnsmasqDropInPath,
+			"dnsmasq", output)
+		return
+	}
+
+	m.logger.Warn("captive portal health: dnsmasq running without drop-in",
+		"dropin_present", dropInOK,
+		"dropin_path", dnsmasqDropInPath,
+		"dnsmasq", output,
+		"hint", "dnsmasq forked before drop-in was written; run 'nmcli con down umbgs-hotspot && nmcli con up umbgs-hotspot' to re-exec dnsmasq with the drop-in active")
 }
 
 // ensureAPFirewall installs iptables rules that:

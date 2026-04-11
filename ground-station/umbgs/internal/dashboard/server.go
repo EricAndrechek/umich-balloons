@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os/exec"
 	"strconv"
@@ -100,6 +101,18 @@ func (s *Server) Run(ctx context.Context) error {
 		Handler: portalMux,
 	}
 
+	// Bind the :80 listener synchronously so a bind failure surfaces in
+	// the logs immediately as a distinct "failed to bind" line, rather
+	// than hiding inside a background goroutine. This was diagnosing a
+	// field issue where phones joining the AP hotspot saw "No Internet
+	// Connection" but no captive portal sheet — which would be the
+	// expected symptom if the :80 listener never actually bound.
+	portalLn, portalBindErr := net.Listen("tcp", portalAddr)
+	if portalBindErr != nil {
+		s.logger.Warn("captive portal bind failed — phones joining the AP hotspot will not see a captive portal sheet",
+			"addr", portalAddr, "error", portalBindErr)
+	}
+
 	go func() {
 		<-ctx.Done()
 		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -108,15 +121,17 @@ func (s *Server) Run(ctx context.Context) error {
 		portalSrv.Shutdown(shutCtx)
 	}()
 
-	// Captive portal listener is best-effort: if port 80 is already in
-	// use (another service, a dev machine), log and continue — the main
-	// dashboard must still come up.
-	go func() {
-		s.logger.Info("captive portal listening", "addr", portalAddr)
-		if err := portalSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			s.logger.Warn("captive portal listener failed", "error", err)
-		}
-	}()
+	// Serve the captive portal in a goroutine only if the bind succeeded.
+	// Best-effort: we continue even if :80 couldn't be bound — the main
+	// dashboard must still come up on its configured port.
+	if portalLn != nil {
+		go func() {
+			s.logger.Info("captive portal listening", "addr", portalAddr)
+			if err := portalSrv.Serve(portalLn); err != nil && err != http.ErrServerClosed {
+				s.logger.Warn("captive portal listener failed", "error", err)
+			}
+		}()
+	}
 
 	s.logger.Info("dashboard listening", "addr", addr)
 	err := srv.ListenAndServe()
@@ -478,8 +493,12 @@ func (s *Server) handleServiceWorker(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(serviceWorkerJS))
 }
 
+// serviceWorkerJS is the offline-capable service worker script. The cache
+// name is bumped whenever a behaviorally-significant change lands so phones
+// that previously cached an older HTML don't keep serving it — the activate
+// handler deletes every cache whose name differs from the current one.
 const serviceWorkerJS = `
-var CACHE = 'umbgs-v1';
+var CACHE = 'umbgs-v3';
 
 self.addEventListener('install', function(e) {
   e.waitUntil(
@@ -504,6 +523,12 @@ self.addEventListener('activate', function(e) {
 
 self.addEventListener('fetch', function(e) {
   if (e.request.method !== 'GET') return;
+  var url = new URL(e.request.url);
+  // Never cache API traffic — state/logs/packets must always be fresh,
+  // and caching /api/update/status would freeze the progress bar.
+  if (url.pathname.indexOf('/api/') === 0 || url.pathname === '/ws') {
+    return;
+  }
   // For navigation requests (HTML pages), try network first, fall back to cache
   if (e.request.mode === 'navigate') {
     e.respondWith(
