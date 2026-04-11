@@ -41,6 +41,10 @@
 	let data = $state<DashboardData | null>(null);
 	let telemetry = $state<TelemetryCache[]>([]);
 	let leaderboard = $state<Contact[]>([]);
+	// Leaderboard filter state — owned here so the parent's poll loop and the
+	// child component see the same values. Empty string = "no filter".
+	let leaderboardBalloon = $state('');
+	let leaderboardModulation = $state('');
 	let loading = $state(true);
 	let error = $state<string | null>(null);
 	let lastRefresh = $state<string | null>(null);
@@ -70,7 +74,11 @@
 			const [d, t, lb] = await Promise.all([
 				api.dashboard(id),
 				telemetryPromise,
-				api.leaderboard(id, { limit: 20 }),
+				api.leaderboard(id, {
+					limit: 20,
+					balloon: leaderboardBalloon || undefined,
+					modulation: leaderboardModulation || undefined,
+				}),
 			]);
 			data = d;
 
@@ -168,6 +176,35 @@
 	const balloons = $derived(data?.payloads.filter((p) => p.type === 'balloon') ?? []);
 	const stations = $derived(data?.payloads.filter((p) => p.type === 'ground_station') ?? []);
 	const unknowns = $derived(data?.payloads.filter((p) => p.type === 'unknown') ?? []);
+
+	// Distinct balloon callsigns + modulations the leaderboard can filter by.
+	// Sourced from the dashboard payload (sourceStats covers every modulation
+	// we've actually heard, so the dropdown only offers options that will
+	// return non-empty results).
+	const leaderboardBalloonOptions = $derived(balloons.map((b) => b.callsign));
+	const leaderboardModulationOptions = $derived.by(() => {
+		const set = new Set<string>();
+		for (const s of data?.sourceStats ?? []) {
+			if (s.modulation) set.add(s.modulation);
+		}
+		return Array.from(set).sort();
+	});
+
+	// Refetch the leaderboard whenever the user flips a filter. We track the
+	// last applied filter pair so the effect doesn't double-fire on the
+	// initial mount (where refresh() already loaded with empty filters).
+	let lastLeaderboardFilters = $state<string | null>(null);
+	$effect(() => {
+		const key = `${leaderboardBalloon}|${leaderboardModulation}`;
+		if (lastLeaderboardFilters === null) {
+			lastLeaderboardFilters = key;
+			return;
+		}
+		if (lastLeaderboardFilters === key) return;
+		lastLeaderboardFilters = key;
+		// Fire-and-forget — refresh() guards against overlapping fetches.
+		refresh();
+	});
 
 	// An archived/historic launch — stopped, never coming back. We hide
 	// every "live" affordance: the signal-loss banner, last-heard tickers,
@@ -329,7 +366,13 @@
 	{/if}
 
 	<div class="mb-6">
-		<Leaderboard contacts={leaderboard} />
+		<Leaderboard
+			contacts={leaderboard}
+			balloons={leaderboardBalloonOptions}
+			modulations={leaderboardModulationOptions}
+			bind:balloonFilter={leaderboardBalloon}
+			bind:modulationFilter={leaderboardModulation}
+		/>
 	</div>
 
 	<div class="mb-6">

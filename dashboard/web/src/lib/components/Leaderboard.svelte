@@ -3,17 +3,83 @@
 	import { formatDistance, formatAltitude, formatDateTime } from '$lib/utils/format';
 	import { googleMaps, sondehubTracker, aprsFi } from '$lib/utils/links';
 
-	let { contacts, title = 'Farthest contacts' }: { contacts: Contact[]; title?: string } = $props();
+	let {
+		contacts,
+		title = 'Farthest contacts',
+		balloons = [],
+		modulations = [],
+		balloonFilter = $bindable(''),
+		modulationFilter = $bindable(''),
+	}: {
+		contacts: Contact[];
+		title?: string;
+		balloons?: string[];
+		modulations?: string[];
+		balloonFilter?: string;
+		modulationFilter?: string;
+	} = $props();
+
+	const showFilters = $derived(balloons.length > 0 || modulations.length > 0);
 </script>
 
 <section>
-	<h2 class="text-lg font-semibold mb-3">{title}</h2>
+	<div class="flex items-baseline justify-between mb-3 gap-3 flex-wrap">
+		<h2 class="text-lg font-semibold">{title}</h2>
+		{#if showFilters}
+			<div class="flex items-center gap-2 text-xs">
+				{#if balloons.length > 0}
+					<label class="flex items-center gap-1">
+						<span class="text-slate-500">Balloon</span>
+						<select
+							bind:value={balloonFilter}
+							class="px-2 py-1 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 font-mono"
+						>
+							<option value="">All</option>
+							{#each balloons as b (b)}
+								<option value={b}>{b}</option>
+							{/each}
+						</select>
+					</label>
+				{/if}
+				{#if modulations.length > 0}
+					<label class="flex items-center gap-1">
+						<span class="text-slate-500">Mode</span>
+						<select
+							bind:value={modulationFilter}
+							class="px-2 py-1 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900"
+						>
+							<option value="">All</option>
+							{#each modulations as m (m)}
+								<option value={m}>{m}</option>
+							{/each}
+						</select>
+					</label>
+				{/if}
+				{#if balloonFilter || modulationFilter}
+					<button
+						type="button"
+						onclick={() => {
+							balloonFilter = '';
+							modulationFilter = '';
+						}}
+						class="px-2 py-1 rounded border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800"
+					>
+						Clear
+					</button>
+				{/if}
+			</div>
+		{/if}
+	</div>
 	{#if contacts.length === 0}
 		<p class="text-sm text-slate-500">
-			No ranked contacts yet. Distances require both the balloon position and the uploader's
-			position — LoRa-only balloons heard only by a ground station without a GPS lock won't
-			appear here until the ground station knows where it is. See "Uploaders heard from" below
-			for every station that has received packets, including ones with no known position.
+			{#if balloonFilter || modulationFilter}
+				No ranked contacts match this filter.
+			{:else}
+				No ranked contacts yet. Distances require both the balloon position and the uploader's
+				position — LoRa-only balloons heard only by a ground station without a GPS lock won't
+				appear here until the ground station knows where it is. See "Uploaders heard from" below
+				for every station that has received packets, including ones with no known position.
+			{/if}
 		</p>
 	{:else}
 		<div class="overflow-x-auto rounded border border-slate-200 dark:border-slate-800">
