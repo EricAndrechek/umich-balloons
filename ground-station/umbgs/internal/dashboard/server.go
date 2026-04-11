@@ -207,22 +207,27 @@ func (s *Server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.logger.Info("manual update check triggered via dashboard")
-	err := s.updater.Check(r.Context())
+	result, err := s.updater.Check(r.Context())
 	if err != nil {
 		s.logger.Warn("update check failed", "error", err)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"ok":    false,
-			"error": err.Error(),
+			"ok":              false,
+			"error":           err.Error(),
+			"current_version": result.CurrentVersion,
+			"latest_version":  result.LatestVersion,
 		})
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"ok":      true,
-		"message": "update check complete",
+		"ok":              true,
+		"message":         result.Message,
+		"updated":         result.Updated,
+		"current_version": result.CurrentVersion,
+		"latest_version":  result.LatestVersion,
 	})
 }
 
