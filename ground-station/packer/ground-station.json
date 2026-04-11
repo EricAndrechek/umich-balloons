@@ -42,13 +42,6 @@
   ],
   "provisioners": [
     {
-      "type": "shell-local",
-      "inline": [
-        "echo 'Building umbgs binary for linux/arm64...'",
-        "cd ground-station/umbgs && GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags \"-s -w -X main.version={{ user `umbgs_version` }}\" -o ../umbgs-bin ./cmd/umbgs/"
-      ]
-    },
-    {
       "type": "file",
       "source": "ground-station",
       "destination": "/tmp/"

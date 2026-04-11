@@ -100,10 +100,19 @@ jobs:
         run: |
           docker pull mkaczanowski/packer-builder-arm:latest
 
+      # Packer's file provisioner uploads ground-station/ wholesale and
+      # install.sh picks up ${SCRIPT_DIR}/umbgs-bin via UMBGS_BINARY. Stage
+      # the prebuilt arm64 artifact there so Packer doesn't need Go in the
+      # builder container (mkaczanowski/packer-builder-arm doesn't ship it).
+      - name: Stage binary for Packer
+        run: |
+          chmod +x umbgs-linux-arm64
+          cp umbgs-linux-arm64 ground-station/umbgs-bin
+          chmod +x ground-station/umbgs-bin
+
       - name: Build Pi image
         run: |
           VERSION="${GITHUB_REF#refs/tags/}"
-          chmod +x umbgs-linux-arm64
           docker run --rm --privileged \
             -v /dev:/dev \
             -v $(pwd):/build \
