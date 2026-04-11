@@ -58,15 +58,30 @@ func (m *Manager) Run(ctx context.Context) error {
 		m.logger.Warn("AP firewall rules failed", "error", err)
 	}
 
-	// Emit a one-shot captive portal health report to the log. This is
-	// load-bearing for field debugging: the operator's only view into the
-	// Pi is the dashboard logs, and "captive portal isn't popping up" has
-	// a handful of distinct failure modes (missing drop-in, dnsmasq not
-	// running, dnsmasq running without our config, etc) that each need a
-	// different fix.
-	m.logCaptivePortalHealth()
+	// Emit a captive portal health report to the log. This is load-bearing
+	// for field debugging: the operator's only view into the Pi is the
+	// dashboard logs, and "captive portal isn't popping up" has a handful
+	// of distinct failure modes (missing drop-in, dnsmasq not running,
+	// dnsmasq running without our config) that each need a different fix.
+	//
+	// We deliberately defer the first report by captivePortalHealthDelay:
+	// NM may not have activated the hotspot yet when umbgs starts, so
+	// checking dnsmasq immediately would produce a spurious "no dnsmasq
+	// process found" false alarm even on a perfectly working system. The
+	// delay lets NM's autoconnect loop bring the hotspot up first.
+	go func() {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(captivePortalHealthDelay):
+		}
+		m.logCaptivePortalHealth()
+	}()
 
-	// Re-sync periodically in case config changes
+	// Re-sync periodically in case config changes. The same tick also
+	// re-runs the captive portal health check so a late hotspot bring-up
+	// (or a post-install drop-in write that hadn't taken effect yet) gets
+	// re-reported once it reaches steady state.
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
 
@@ -78,9 +93,18 @@ func (m *Manager) Run(ctx context.Context) error {
 			if err := m.syncWiFi(); err != nil {
 				m.logger.Warn("WiFi sync failed", "error", err)
 			}
+			m.logCaptivePortalHealth()
 		}
 	}
 }
+
+// captivePortalHealthDelay is how long we wait after startup before
+// checking whether dnsmasq is running. NM's autoconnect loop typically
+// brings the fallback hotspot up within a few seconds, but on a fresh
+// boot with slow SD-card I/O it can take longer; 20s is enough headroom
+// to avoid false "no dnsmasq" warnings while still surfacing a real
+// problem quickly.
+const captivePortalHealthDelay = 20 * time.Second
 
 // syncWiFi creates/updates NetworkManager connections for configured WiFi networks.
 func (m *Manager) syncWiFi() error {
