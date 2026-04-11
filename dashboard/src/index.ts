@@ -46,6 +46,28 @@ app.route("/api/launches", leaderboardRoutes);
 // Fall through to static assets for everything else (SPA fallback included).
 app.all("*", (c) => c.env.ASSETS.fetch(c.req.raw));
 
+// Cloudflare cron expressions can't fire faster than once per minute, so we
+// fan out each scheduled invocation into N sub-polls separated by SUB_POLL_MS.
+// 3 polls / 20s gap gives effective ~20s SondeHub poll cadence — well within
+// Workers Paid wall-time budgets. handleCron is dedup-safe across overlapping
+// runs (it pre-loads a 20-minute window of existing contact keys), so back-to-
+// back invocations don't double-write aggregates.
+const SUB_POLLS_PER_TICK = 3;
+const SUB_POLL_MS = 20_000;
+
+async function fanOutCron(env: Env): Promise<void> {
+  for (let i = 0; i < SUB_POLLS_PER_TICK; i++) {
+    try {
+      await handleCron(env);
+    } catch (err) {
+      console.error("sub-poll failed:", err);
+    }
+    if (i < SUB_POLLS_PER_TICK - 1) {
+      await new Promise((r) => setTimeout(r, SUB_POLL_MS));
+    }
+  }
+}
+
 export default {
   fetch: app.fetch,
 
@@ -54,6 +76,6 @@ export default {
     env: Env,
     ctx: ExecutionContext,
   ): Promise<void> {
-    ctx.waitUntil(handleCron(env));
+    ctx.waitUntil(fanOutCron(env));
   },
 };

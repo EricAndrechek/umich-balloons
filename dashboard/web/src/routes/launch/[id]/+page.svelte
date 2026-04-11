@@ -16,10 +16,12 @@
 
 	const id = $derived(parseInt(page.params.id ?? '0'));
 
-	// Poll cadence (ms). 20s aligns with the 120s cron interval (6 polls
-	// per cron cycle) and is well inside the edge-cache TTL so most polls
-	// hit cache instead of D1.
-	const POLL_INTERVAL_MS = 20_000;
+	// Poll cadence (ms). The Worker fans out its 1-min cron into 3 sub-polls
+	// at 20s intervals, so SondeHub data lands in D1 every ~20s. Polling at
+	// 10s here means we never wait more than ~half a sub-poll cycle to see
+	// fresh data, while edge-cache (5s TTL) absorbs the request volume so
+	// most polls don't even reach D1.
+	const POLL_INTERVAL_MS = 10_000;
 
 	// If the tab is hidden longer than this, we can't trust the in-memory
 	// delta cursor — the row count between `since` and now may exceed the

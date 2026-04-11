@@ -25,9 +25,13 @@ invocation_logs = true
 [vars]
 SONDEHUB_API_URL = "https://api.v2.sondehub.org"
 
-# Cron trigger: every 2 minutes
+# Cron trigger: every minute (Cloudflare's minimum cadence). Combined with
+# the 30s edge cache TTL on the public read endpoints, this puts the worst-
+# case "last heard" age users see at roughly cron delay + cache age ≈ 90s,
+# averaging ~45s. SondeHub API volume stays trivial — ~8 requests/2min for
+# the typical 3-balloon group — and D1 writes stay well under the free tier.
 [triggers]
-crons = ["*/2 * * * *"]
+crons = ["* * * * *"]
 
 # D1 database binding — database_id gets filled in after `wrangler d1 create`
 [[d1_databases]]

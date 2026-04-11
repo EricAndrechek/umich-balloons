@@ -13,11 +13,16 @@ import { cachedJson, HttpError } from "../lib/cache";
 
 export const dashboardRoutes = new Hono<{ Bindings: Env }>();
 
-// Cache TTL for public read endpoints. Cron runs every 120s, so any value
-// < 120s is strictly safe — clients never see data older than one cron
-// cycle. 90s gets us 4 cache hits for every 1 origin hit at our 20s
-// client poll cadence, which is a ~80% D1 read reduction.
-const PUBLIC_CACHE_TTL = 90;
+// Cache TTL for public read endpoints. With Workers Paid the D1 read
+// budget is effectively unlimited, so this TTL exists only as thundering-
+// herd insurance — when 100 viewers' polls align, only one of them runs
+// the queries and the rest serve from edge cache. 5s is short enough to
+// be invisible as a freshness lag while still amortizing alignment bursts.
+// The cron fans out into 3 sub-polls per scheduled invocation (see
+// src/index.ts), so SondeHub data lands in D1 every ~20s and this TTL is
+// well below that cadence — clients always see data within one sub-poll
+// of when it was written.
+const PUBLIC_CACHE_TTL = 5;
 
 // Full dashboard data for a launch group (single request for all panels)
 dashboardRoutes.get("/:id/dashboard", async (c) => {

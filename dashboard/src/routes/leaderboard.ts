@@ -4,9 +4,9 @@ import { cachedJson } from "../lib/cache";
 
 export const leaderboardRoutes = new Hono<{ Bindings: Env }>();
 
-// Same TTL rationale as the dashboard routes — contacts only grow when
-// the cron runs, so edge-caching for < cron interval is honest.
-const PUBLIC_CACHE_TTL = 90;
+// Same TTL rationale as the dashboard routes — kept in sync with
+// PUBLIC_CACHE_TTL in routes/dashboard.ts.
+const PUBLIC_CACHE_TTL = 5;
 
 // Leaderboard: farthest contacts, sortable by balloon/modulation
 leaderboardRoutes.get("/:id/leaderboard", async (c) => {
