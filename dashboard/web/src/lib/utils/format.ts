@@ -35,7 +35,16 @@ export function formatDateTime(iso: string | null | undefined): string {
 
 export function formatAge(iso: string | null | undefined, nowMs?: number): string {
 	if (!iso) return 'never';
-	const ms = (nowMs ?? Date.now()) - new Date(iso).getTime();
+	let ms = (nowMs ?? Date.now()) - new Date(iso).getTime();
+	// Clamp small negative drift to zero. The reactive clock store only
+	// ticks once per second, so a timestamp set in the same render pass
+	// (e.g. `lastRefresh = new Date().toISOString()`) can briefly be a few
+	// hundred ms ahead of `clock.now` until the next tick — that's not
+	// "future", it's just quantization. SondeHub datetimes can also land a
+	// second or two ahead of the local wall clock due to NTP skew between
+	// the client and their servers. Only flag genuinely anomalous values.
+	const DRIFT_TOLERANCE_MS = 5000;
+	if (ms < 0 && ms > -DRIFT_TOLERANCE_MS) ms = 0;
 	if (ms < 0) return 'future';
 	const s = Math.floor(ms / 1000);
 	if (s < 60) return `${s}s ago`;
