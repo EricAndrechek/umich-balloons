@@ -219,7 +219,7 @@ export async function handleIridium(request: Request, env: Env): Promise<Respons
     return jsonResponse({ error: "decoded data is not valid JSON" }, 400);
   }
 
-  const sender = "iridium-" + req.imei;
+  const sender = "Iridium";
 
   // Use Iridium network's transmit_time as the receiver timestamp
   let telem: Telemetry;
@@ -235,7 +235,6 @@ export async function handleIridium(request: Request, env: Env): Promise<Respons
   telem.iridium_latitude = req.iridium_latitude;
   telem.iridium_longitude = req.iridium_longitude;
   telem.iridium_cep = req.iridium_cep;
-  telem.imei = req.imei;
   telem.momsn = req.momsn;
 
   console.log(`Iridium packet from IMEI ${req.imei}, callsign=${telem.payload_callsign}`);
