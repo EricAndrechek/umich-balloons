@@ -18,6 +18,7 @@ app.get("/health", (c) => c.json({ ok: true }));
 // and all mutation verbs) requires an admin password bearer token.
 const PUBLIC_GET_PATTERNS: RegExp[] = [
   /^\/api\/launches\/active\/?$/,
+  /^\/api\/launches\/history\/?$/,
   /^\/api\/launches\/\d+\/dashboard\/?$/,
   /^\/api\/launches\/\d+\/telemetry\/?$/,
   /^\/api\/launches\/\d+\/leaderboard\/?$/,

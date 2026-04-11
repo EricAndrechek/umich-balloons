@@ -30,6 +30,31 @@ launchRoutes.get("/", async (c) => {
   return c.json(groups);
 });
 
+// List historic (archived) launch groups — anything that was started and
+// then stopped. Powers the "Past Launches" section on the homepage so
+// viewers can still browse old flights after the launch ends.
+launchRoutes.get("/history", async (c) => {
+  const rows = await c.env.DB.prepare(
+    `SELECT * FROM launch_groups
+     WHERE active = 0 AND stopped_at IS NOT NULL
+     ORDER BY stopped_at DESC`,
+  )
+    .all<LaunchGroupRow>();
+
+  const groups = await Promise.all(
+    rows.results.map(async (group) => {
+      const payloads = await c.env.DB.prepare(
+        "SELECT * FROM payloads WHERE launch_group_id = ?",
+      )
+        .bind(group.id)
+        .all<PayloadRow>();
+      return { ...formatGroup(group), payloads: payloads.results };
+    }),
+  );
+
+  return c.json(groups);
+});
+
 // List active launch groups (for homepage banner)
 launchRoutes.get("/active", async (c) => {
   const rows = await c.env.DB.prepare(

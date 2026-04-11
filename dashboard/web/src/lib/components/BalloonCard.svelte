@@ -27,6 +27,7 @@
 		track,
 		maxAlt,
 		groupStartedAt,
+		archived = false,
 	}: {
 		payload: Payload;
 		prediction?: Prediction;
@@ -35,8 +36,13 @@
 		track: TelemetryCache[];
 		maxAlt?: number | null;
 		groupStartedAt?: string | null;
+		archived?: boolean;
 	} = $props();
 
+	// On a live launch this drives the colored dot/border + ONLINE/STALE/etc.
+	// label. Archived launches deliberately bypass it — every payload would
+	// always read as "OFFLINE" (last_heard is hours/days old by definition),
+	// which would be alarming and useless.
 	const status = $derived(payloadStatus(payload, clock.now));
 
 	// Derive the burst point (apex of predicted trajectory) from the
@@ -199,25 +205,30 @@
 </script>
 
 <div
-	class="p-4 rounded-lg border-2 {statusBorderClass(status.kind)} bg-white dark:bg-slate-900"
+	class="p-4 rounded-lg border-2 {archived
+		? 'border-slate-300 dark:border-slate-700'
+		: statusBorderClass(status.kind)} bg-white dark:bg-slate-900"
 >
 	<div class="flex items-start justify-between gap-3 mb-3">
 		<div class="min-w-0 flex-1">
 			<div class="flex items-center gap-2 mb-0.5">
 				<span
-					class="inline-block w-2.5 h-2.5 rounded-full {statusDotClass(status.kind)} {status.kind ===
-					'online'
+					class="inline-block w-2.5 h-2.5 rounded-full {archived
+						? 'bg-slate-400'
+						: statusDotClass(status.kind)} {!archived && status.kind === 'online'
 						? 'animate-pulse'
 						: ''}"
 					aria-hidden="true"
 				></span>
 				<h3 class="font-mono font-bold text-lg truncate">{payload.callsign}</h3>
 			</div>
-			<div
-				class="text-[10px] font-bold tracking-wider mb-1 {statusTextClass(status.kind)}"
-			>
-				{status.label}
-			</div>
+			{#if archived}
+				<div class="text-[10px] font-bold tracking-wider mb-1 text-slate-500">ARCHIVED</div>
+			{:else}
+				<div class="text-[10px] font-bold tracking-wider mb-1 {statusTextClass(status.kind)}">
+					{status.label}
+				</div>
+			{/if}
 			<div class="flex items-center gap-2 flex-wrap">
 				<PhaseBadge phase={payload.phase} />
 				{#if payload.recovered}
@@ -225,17 +236,19 @@
 						recovered
 					</span>
 				{/if}
-				{#if payload.launched_at}
+				{#if !archived && payload.launched_at}
 					<span class="text-xs text-slate-500">T+{formatDuration(payload.launched_at, clock.now)}</span>
 				{/if}
 			</div>
 		</div>
-		<div class="text-right text-xs text-slate-500 shrink-0">
-			<div>last heard</div>
-			<div class="font-semibold tabular-nums text-slate-700 dark:text-slate-300">
-				{formatAge(payload.last_heard, clock.now)}
+		{#if !archived}
+			<div class="text-right text-xs text-slate-500 shrink-0">
+				<div>last heard</div>
+				<div class="font-semibold tabular-nums text-slate-700 dark:text-slate-300">
+					{formatAge(payload.last_heard, clock.now)}
+				</div>
 			</div>
-		</div>
+		{/if}
 	</div>
 
 	<div class="mb-3">

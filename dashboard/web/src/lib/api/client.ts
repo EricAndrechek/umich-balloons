@@ -75,6 +75,7 @@ async function del<T>(path: string): Promise<T> {
 export const api = {
 	listGroups: () => get<LaunchGroupWithPayloads[]>('/api/launches'),
 	listActive: () => get<LaunchGroupWithPayloads[]>('/api/launches/active'),
+	listHistory: () => get<LaunchGroupWithPayloads[]>('/api/launches/history'),
 	getGroup: (id: number) => get<LaunchGroupWithPayloads>(`/api/launches/${id}`),
 	createGroup: (body: { name: string; base_callsigns: string[]; expected_balloon_count?: number }) =>
 		post<{ id: number }>('/api/launches', body),

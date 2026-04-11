@@ -11,11 +11,13 @@
 		balloons,
 		uploaderStats,
 		telemetry,
+		archived = false,
 	}: {
 		stations: Payload[];
 		balloons: Payload[];
 		uploaderStats: UploaderStat[];
 		telemetry: TelemetryCache[];
+		archived?: boolean;
 	} = $props();
 
 	// Same thresholds as SignalStatus — keep in sync.
@@ -146,50 +148,63 @@
 		<div class="flex items-baseline justify-between mb-3 gap-3 flex-wrap">
 			<h2 class="text-lg font-semibold">Chase vehicles</h2>
 			<span class="text-xs text-slate-500">
-				{rows.filter((r) => r.status === 'online').length} online · {rows.length} total
+				{#if archived}
+					{rows.length} total
+				{:else}
+					{rows.filter((r) => r.status === 'online').length} online · {rows.length} total
+				{/if}
 			</span>
 		</div>
 		<div class="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
 			{#each rows as r (r.station.callsign)}
 				<div
-					class="p-4 rounded-lg border-2 {r.status === 'online'
-						? 'border-green-500/60'
-						: r.status === 'stale'
-							? 'border-amber-500/60'
-							: r.status === 'offline'
-								? 'border-red-500/60'
-								: 'border-slate-300 dark:border-slate-700'} bg-white dark:bg-slate-900"
+					class="p-4 rounded-lg border-2 {archived
+						? 'border-slate-300 dark:border-slate-700'
+						: r.status === 'online'
+							? 'border-green-500/60'
+							: r.status === 'stale'
+								? 'border-amber-500/60'
+								: r.status === 'offline'
+									? 'border-red-500/60'
+									: 'border-slate-300 dark:border-slate-700'} bg-white dark:bg-slate-900"
 				>
 					<div class="flex items-start justify-between gap-2 mb-2">
 						<div class="min-w-0 flex-1">
 							<div class="flex items-center gap-2 mb-0.5">
 								<span
-									class="inline-block w-2.5 h-2.5 rounded-full {statusColor(r.status)} {r.status ===
-									'online'
+									class="inline-block w-2.5 h-2.5 rounded-full {archived
+										? 'bg-slate-400'
+										: statusColor(r.status)} {!archived && r.status === 'online'
 										? 'animate-pulse'
 										: ''}"
 									aria-hidden="true"
 								></span>
 								<h3 class="font-mono font-bold truncate">{r.station.callsign}</h3>
 							</div>
-							<div
-								class="text-[10px] font-bold tracking-wider {r.status === 'online'
-									? 'text-green-700 dark:text-green-400'
-									: r.status === 'stale'
-										? 'text-amber-700 dark:text-amber-400'
-										: r.status === 'offline'
-											? 'text-red-700 dark:text-red-400'
-											: 'text-slate-500'}"
-							>
-								{statusLabel(r.status)}
-							</div>
+							{#if archived}
+								<div class="text-[10px] font-bold tracking-wider text-slate-500">ARCHIVED</div>
+							{:else}
+								<div
+									class="text-[10px] font-bold tracking-wider {r.status === 'online'
+										? 'text-green-700 dark:text-green-400'
+										: r.status === 'stale'
+											? 'text-amber-700 dark:text-amber-400'
+											: r.status === 'offline'
+												? 'text-red-700 dark:text-red-400'
+												: 'text-slate-500'}"
+								>
+									{statusLabel(r.status)}
+								</div>
+							{/if}
 						</div>
-						<div class="text-right text-xs text-slate-500 shrink-0">
-							<div>last heard</div>
-							<div class="font-semibold tabular-nums text-slate-700 dark:text-slate-300">
-								{formatAge(r.station.last_heard, clock.now)}
+						{#if !archived}
+							<div class="text-right text-xs text-slate-500 shrink-0">
+								<div>last heard</div>
+								<div class="font-semibold tabular-nums text-slate-700 dark:text-slate-300">
+									{formatAge(r.station.last_heard, clock.now)}
+								</div>
 							</div>
-						</div>
+						{/if}
 					</div>
 
 					{#if r.station.last_lat != null && r.station.last_lon != null}

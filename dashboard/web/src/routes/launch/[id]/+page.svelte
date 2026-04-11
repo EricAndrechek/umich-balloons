@@ -10,7 +10,7 @@
 	import Leaderboard from '$lib/components/Leaderboard.svelte';
 	import SourceBreakdown from '$lib/components/SourceBreakdown.svelte';
 	import UploadersHeard from '$lib/components/UploadersHeard.svelte';
-	import { formatAge } from '$lib/utils/format';
+	import { formatAge, formatDateTime, formatDuration } from '$lib/utils/format';
 	import { clock } from '$lib/stores/clock.svelte';
 	import { payloadStatus } from '$lib/utils/status';
 
@@ -116,6 +116,9 @@
 
 	function startPolling() {
 		if (refreshTimer != null) return;
+		// Archived launches don't change — no point polling. The first
+		// fetch on mount has already loaded everything we'll ever show.
+		if (data && !data.group.active) return;
 		refreshTimer = setInterval(() => refresh(), POLL_INTERVAL_MS);
 	}
 
@@ -135,17 +138,24 @@
 		} else {
 			// Resume. If we've been hidden long enough that our delta
 			// cursor is untrustworthy, force a full refetch so we don't
-			// silently miss rows. Then restart the interval.
+			// silently miss rows. Then restart the interval (no-op for
+			// archived launches).
+			if (data && !data.group.active) return;
 			const idleMs = Date.now() - lastRefreshMs;
 			refresh({ force: idleMs > STALE_RESUME_MS });
 			startPolling();
 		}
 	}
 
-	onMount(() => {
-		refresh({ force: true });
-		startPolling();
-		document.addEventListener('visibilitychange', handleVisibility);
+	onMount(async () => {
+		await refresh({ force: true });
+		// Only attach the polling timer + visibility listener for live
+		// launches. Archived launches are static so the timer would do
+		// nothing and the visibility hook would just run dead refreshes.
+		if (data && data.group.active) {
+			startPolling();
+			document.addEventListener('visibilitychange', handleVisibility);
+		}
 	});
 
 	onDestroy(() => {
@@ -158,6 +168,14 @@
 	const balloons = $derived(data?.payloads.filter((p) => p.type === 'balloon') ?? []);
 	const stations = $derived(data?.payloads.filter((p) => p.type === 'ground_station') ?? []);
 	const unknowns = $derived(data?.payloads.filter((p) => p.type === 'unknown') ?? []);
+
+	// An archived/historic launch — stopped, never coming back. We hide
+	// every "live" affordance: the signal-loss banner, last-heard tickers,
+	// the relative "started X ago" header, the "last updated" footer, and
+	// the polling timer itself. The cards still show position, max alt,
+	// total distance, and predicted-landing data because those are the
+	// historical record of the flight.
+	const archived = $derived(data != null && !data.group.active);
 
 	// "X online / Y total" summary counts in-flight balloons that are
 	// currently beaconing. Pre-launch / landed / recovered balloons are
@@ -210,22 +228,38 @@
 		<div>
 			<h1 class="text-2xl font-bold">{data.group.name}</h1>
 			<p class="text-sm text-slate-500">
-				{#if data.group.active}
-					<span class="text-green-600 dark:text-green-400">● Active</span>
+				{#if archived}
+					<span
+						class="inline-block px-1.5 py-0.5 rounded text-[10px] font-bold tracking-wider bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-400 align-middle"
+					>
+						ARCHIVED
+					</span>
+					{#if data.group.started_at && data.group.stopped_at}
+						· {formatDateTime(data.group.started_at)} → {formatDateTime(data.group.stopped_at)}
+						· duration {formatDuration(
+							data.group.started_at,
+							Date.parse(data.group.stopped_at),
+						)}
+					{/if}
 				{:else}
-					<span>Inactive</span>
+					<span class="text-green-600 dark:text-green-400">● Active</span>
+					· Started {formatAge(data.group.started_at, clock.now)}
 				{/if}
-				· Started {formatAge(data.group.started_at, clock.now)}
 			</p>
 		</div>
-		<div class="text-xs text-slate-500">
-			{#if lastRefresh}Last updated {formatAge(lastRefresh, clock.now)}{/if}
-			{#if error}<span class="text-red-500 ml-2">({error})</span>{/if}
-		</div>
+		{#if !archived}
+			<div class="text-xs text-slate-500">
+				{#if lastRefresh}Last updated {formatAge(lastRefresh, clock.now)}{/if}
+				{#if error}<span class="text-red-500 ml-2">({error})</span>{/if}
+			</div>
+		{/if}
 	</div>
 
-	<!-- Signal status banner — only renders when something is stale. -->
-	<SignalStatus payloads={data.payloads} />
+	<!-- Signal status banner — only renders when something is stale, and
+	     never on archived launches (where everything is "stale" forever). -->
+	{#if !archived}
+		<SignalStatus payloads={data.payloads} />
+	{/if}
 
 	{#if data.group.expected_balloon_count != null && balloons.every((b) => !b.launched_at)}
 		<div class="mb-6">
@@ -255,6 +289,7 @@
 						track={trackFor(b.callsign)}
 						maxAlt={maxAltFor(b.callsign)}
 						groupStartedAt={data.group.started_at}
+						{archived}
 					/>
 				{/each}
 			</div>
@@ -266,6 +301,7 @@
 		balloons={balloons}
 		uploaderStats={data.uploaderStats}
 		telemetry={telemetry}
+		{archived}
 	/>
 
 	{#if unknowns.length > 0}
@@ -285,6 +321,7 @@
 						track={trackFor(u.callsign)}
 						maxAlt={maxAltFor(u.callsign)}
 						groupStartedAt={data.group.started_at}
+						{archived}
 					/>
 				{/each}
 			</div>
