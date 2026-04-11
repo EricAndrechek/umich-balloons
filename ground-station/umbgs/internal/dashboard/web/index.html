@@ -1107,6 +1107,19 @@ body.kiosk-mode { zoom: 2.5; }
   };
 
   // --- Config ---
+  // lastLoadedConfig is a deep-cloned snapshot of the config we most recently
+  // received from the server (via /api/config GET or WebSocket broadcast).
+  // The save handler starts from this snapshot and overlays form values, so
+  // fields the UI doesn't render (update.channel, dashboard.port, aprs.kiss_*,
+  // etc.) round-trip untouched. Without this, every save silently clobbers
+  // those fields with hardcoded defaults or JSON zero values.
+  var lastLoadedConfig = null;
+
+  function cloneConfig(cfg) {
+    try { return JSON.parse(JSON.stringify(cfg || {})); }
+    catch (e) { return {}; }
+  }
+
   function loadConfig() {
     fetch('/api/config').then(function(r) { return r.json(); }).then(function(envelope) {
       configVersion = envelope.version || 0;
@@ -1123,6 +1136,10 @@ body.kiosk-mode { zoom: 2.5; }
   }
 
   function populateConfigForm(cfg) {
+    // Snapshot the full config BEFORE touching the form, so saveConfig can
+    // preserve fields we don't render. Deep clone to protect against later
+    // mutation during save.
+    lastLoadedConfig = cloneConfig(cfg);
     document.getElementById('cfg-callsign').value = cfg.callsign || '';
     document.getElementById('cfg-ssid').value = cfg.ssid || 0;
     document.getElementById('cfg-api_url').value = cfg.api_url || '';
@@ -1169,43 +1186,60 @@ body.kiosk-mode { zoom: 2.5; }
   document.getElementById('cfgReloadBtn').onclick = loadConfig;
 
   document.getElementById('saveConfigBtn').onclick = function() {
+    var st = document.getElementById('cfgStatus');
+
+    // Refuse to save before we've successfully loaded a baseline config.
+    // Without lastLoadedConfig we'd POST a half-populated struct and the
+    // server would reject it (or worse, accept it and zero fields we don't
+    // render). Prompt the user to reload instead.
+    if (!lastLoadedConfig) {
+      st.textContent = 'Config not loaded yet — click Reload and try again.';
+      st.style.color = 'var(--error)';
+      return;
+    }
+
     var nets = [];
     document.querySelectorAll('#cfg-wifi-list .wifi-row').forEach(function(r) {
       var s = r.querySelector('.wifi-ssid').value.trim();
       var p = r.querySelector('.wifi-psk').value;
       if (s) nets.push({ ssid: s, psk: p });
     });
-    var cfg = {
-      callsign: document.getElementById('cfg-callsign').value.trim(),
-      ssid: parseInt(document.getElementById('cfg-ssid').value) || 0,
-      api_url: document.getElementById('cfg-api_url').value.trim(),
-      log_level: document.getElementById('cfg-log_level').value,
-      wifi: { networks: nets },
-      aprs: {
-        enabled: document.getElementById('cfg-aprs-enabled').checked,
-        kiss_host: '127.0.0.1', kiss_port: 8001,
-        frequency: parseFloat(document.getElementById('cfg-aprs-freq').value) || 144.390,
-        gain: parseInt(document.getElementById('cfg-aprs-gain').value) || 0,
-        igserver: document.getElementById('cfg-aprs-igserver').value.trim(),
-        beacon_comment: document.getElementById('cfg-aprs-comment').value.trim(),
-      },
-      lora: {
-        enabled: document.getElementById('cfg-lora-enabled').checked,
-        baud: parseInt(document.getElementById('cfg-lora-baud').value) || 9600,
-        device: document.getElementById('cfg-lora-device').value.trim(),
-      },
-      gps: {
-        enabled: document.getElementById('cfg-gps-enabled').checked,
-        report_interval: parseInt(document.getElementById('cfg-gps-interval').value) || 60,
-      },
-      dashboard: { enabled: true, port: 8080 },
-      display: {
-        enabled: document.getElementById('cfg-display-enabled').checked,
-        url: document.getElementById('cfg-display-url').value.trim(),
-      },
-      update: { enabled: true, channel: 'stable' },
-    };
-    var st = document.getElementById('cfgStatus');
+
+    // Start from a deep clone of the last-loaded config. Fields the UI
+    // doesn't render (dashboard.port, update.*, aprs.kiss_*, plus any
+    // future addition) are preserved verbatim. Only the overlays below
+    // mutate the snapshot.
+    var cfg = cloneConfig(lastLoadedConfig);
+
+    cfg.callsign = document.getElementById('cfg-callsign').value.trim();
+    cfg.ssid = parseInt(document.getElementById('cfg-ssid').value) || 0;
+    cfg.api_url = document.getElementById('cfg-api_url').value.trim();
+    cfg.log_level = document.getElementById('cfg-log_level').value;
+    cfg.wifi = { networks: nets };
+
+    cfg.aprs = cfg.aprs || {};
+    cfg.aprs.enabled = document.getElementById('cfg-aprs-enabled').checked;
+    cfg.aprs.frequency = parseFloat(document.getElementById('cfg-aprs-freq').value) || 144.390;
+    cfg.aprs.gain = parseInt(document.getElementById('cfg-aprs-gain').value) || 0;
+    cfg.aprs.igserver = document.getElementById('cfg-aprs-igserver').value.trim();
+    cfg.aprs.beacon_comment = document.getElementById('cfg-aprs-comment').value.trim();
+    // kiss_host / kiss_port intentionally NOT overwritten — preserved from snapshot.
+
+    cfg.lora = cfg.lora || {};
+    cfg.lora.enabled = document.getElementById('cfg-lora-enabled').checked;
+    cfg.lora.baud = parseInt(document.getElementById('cfg-lora-baud').value) || 9600;
+    cfg.lora.device = document.getElementById('cfg-lora-device').value.trim();
+
+    cfg.gps = cfg.gps || {};
+    cfg.gps.enabled = document.getElementById('cfg-gps-enabled').checked;
+    cfg.gps.report_interval = parseInt(document.getElementById('cfg-gps-interval').value) || 60;
+
+    cfg.display = cfg.display || {};
+    cfg.display.enabled = document.getElementById('cfg-display-enabled').checked;
+    cfg.display.url = document.getElementById('cfg-display-url').value.trim();
+
+    // dashboard.* and update.* are NOT touched here — preserved from snapshot.
+
     st.textContent = 'Saving...'; st.style.color = 'var(--text-muted)';
     fetch('/api/config', {
       method: 'PUT',
