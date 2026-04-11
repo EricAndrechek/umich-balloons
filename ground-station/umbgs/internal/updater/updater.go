@@ -125,6 +125,12 @@ func (u *Updater) check(ctx context.Context) error {
 		return nil
 	}
 
+	// 405 = endpoint doesn't exist yet on server; treat as "no update available"
+	if resp.StatusCode == http.StatusMethodNotAllowed {
+		u.logger.Debug("update endpoint not available on server (405)")
+		return nil
+	}
+
 	if resp.StatusCode != http.StatusOK {
 		u.logger.Warn("unexpected update response", "status", resp.StatusCode)
 		return fmt.Errorf("unexpected status: %d", resp.StatusCode)

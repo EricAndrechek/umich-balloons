@@ -98,6 +98,17 @@ func (r *Reporter) readLoop(ctx context.Context) error {
 	}
 	defer conn.Close()
 
+	// Close the conn when context is cancelled so blocking reads unblock.
+	closeDone := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			conn.Close()
+		case <-closeDone:
+		}
+	}()
+	defer close(closeDone)
+
 	// Enable watch mode
 	_, err = conn.Write([]byte(`?WATCH={"enable":true,"json":true}` + "\n"))
 	if err != nil {

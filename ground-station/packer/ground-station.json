@@ -45,7 +45,7 @@
       "type": "shell-local",
       "inline": [
         "echo 'Building umbgs binary for linux/arm64...'",
-        "cd ground-station/umbgs && GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags \"-s -w -X main.version={{ user `umbgs_version` }}\" -o ../umbgs ./cmd/umbgs/"
+        "cd ground-station/umbgs && GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags \"-s -w -X main.version={{ user `umbgs_version` }}\" -o ../umbgs-bin ./cmd/umbgs/"
       ]
     },
     {
@@ -57,7 +57,7 @@
       "type": "shell",
       "inline": [
         "chmod +x /tmp/ground-station/install.sh",
-        "UMBGS_VERSION={{ user `umbgs_version` }} /tmp/ground-station/install.sh",
+        "UMBGS_BINARY=/tmp/ground-station/umbgs-bin UMBGS_VERSION={{ user `umbgs_version` }} /tmp/ground-station/install.sh",
         "rm -rf /tmp/ground-station"
       ]
     }

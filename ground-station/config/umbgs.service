@@ -13,8 +13,6 @@ Environment=GOGC=50
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=umbgs
-ProtectHome=yes
-PrivateTmp=yes
 
 [Install]
 WantedBy=multi-user.target

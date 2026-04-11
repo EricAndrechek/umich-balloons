@@ -25,9 +25,10 @@ var ignorePrefixes = []string{
 
 // Listener reads APRS data from a Direwolf KISS TCP socket.
 type Listener struct {
-	cfg    *config.Manager
-	out    chan<- types.Packet
-	logger *slog.Logger
+	cfg           *config.Manager
+	out           chan<- types.Packet
+	logger        *slog.Logger
+	everConnected bool // tracks whether we've ever had a successful connection
 }
 
 // NewListener creates a new APRS listener that sends packets to the given channel.
@@ -55,11 +56,15 @@ func (l *Listener) Run(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		l.logger.Warn("Direwolf connection lost, reconnecting", "error", err)
+		if l.everConnected {
+			l.logger.Warn("Direwolf connection lost, reconnecting", "error", err)
+		} else {
+			l.logger.Debug("waiting for Direwolf to start", "error", err)
+		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(15 * time.Second):
+		case <-time.After(10 * time.Second):
 		}
 	}
 }
@@ -74,6 +79,7 @@ func (l *Listener) readLoop(ctx context.Context, addr, callsign string) error {
 		return fmt.Errorf("dial %s: %w", addr, err)
 	}
 	defer conn.Close()
+	l.everConnected = true
 	l.logger.Info("connected to Direwolf")
 
 	scanner := bufio.NewScanner(conn)

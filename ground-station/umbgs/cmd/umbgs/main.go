@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"io"
 	"log/slog"
@@ -10,6 +11,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -40,6 +42,13 @@ const (
 )
 
 func main() {
+	showVersion := flag.Bool("version", false, "print version and exit")
+	flag.Parse()
+	if *showVersion {
+		fmt.Println(version)
+		os.Exit(0)
+	}
+
 	// Setup log directory
 	os.MkdirAll(logDir, 0755)
 
@@ -144,6 +153,7 @@ func main() {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			defer logger.Info("subsystem stopped", "name", name)
 			logger.Info("starting subsystem", "name", name)
 			if err := fn(ctx); err != nil && ctx.Err() == nil {
 				logger.Error("subsystem failed", "name", name, "error", err)
@@ -194,17 +204,50 @@ func main() {
 				return fmt.Errorf("create runtime dir: %w", err)
 			}
 
+			displayLogger := logger.With("service", "display")
 			for {
-				cmd := exec.CommandContext(ctx, "cage", "--", "cog", displayURL)
-				cmd.Stdout = os.Stdout
-				cmd.Stderr = os.Stderr
+				kioskURL := displayURL
+				if !strings.Contains(kioskURL, "?") {
+					kioskURL += "?kiosk=1"
+				} else {
+					kioskURL += "&kiosk=1"
+				}
+				cmd := exec.Command("cage", "--", "cog", kioskURL)
+				cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+				cmd.Stdout = &filteredLogWriter{logger: displayLogger}
+				cmd.Stderr = &filteredLogWriter{logger: displayLogger}
 				cmd.Env = append(os.Environ(),
-					"WLR_LIBINPUT_NO_DEVICES=1",
+					"WLR_NO_HARDWARE_CURSORS=1",
+					// cage/wlroots always draws a cursor when a pointer-capable
+					// input device (touchscreen) is present — there's no flag
+					// to disable it. Point at our transparent xcursor theme
+					// installed by install.sh at /usr/share/icons/blank.
+					"XCURSOR_THEME=blank",
+					"XCURSOR_SIZE=1",
 					"XDG_RUNTIME_DIR="+runtimeDir,
 					"LIBSEAT_BACKEND=builtin",
 					"HOME=/tmp",
 				)
-				if err := cmd.Run(); err != nil {
+				if err := cmd.Start(); err != nil {
+					if ctx.Err() != nil {
+						return ctx.Err()
+					}
+					logger.Warn("display process failed to start", "error", err)
+					select {
+					case <-ctx.Done():
+						return ctx.Err()
+					case <-time.After(5 * time.Second):
+					}
+					continue
+				}
+				// Kill process group on context cancel
+				go func() {
+					<-ctx.Done()
+					if cmd.Process != nil {
+						syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+					}
+				}()
+				if err := cmd.Wait(); err != nil {
 					if ctx.Err() != nil {
 						return ctx.Err()
 					}
@@ -220,6 +263,7 @@ func main() {
 	}
 
 	// Stats update goroutine - bridges subsystem state to system stats + sd_notify watchdog
+	systemdServices := []string{"umbgs", "gpsd", "chrony"}
 	run("stats-bridge", func(ctx context.Context) error {
 		ticker := time.NewTicker(3 * time.Second)
 		defer ticker.Stop()
@@ -229,12 +273,25 @@ func main() {
 				return ctx.Err()
 			case <-ticker.C:
 				sdNotify("WATCHDOG=1")
+				// Check systemd service statuses
+				svcStatus := make(map[string]string, len(systemdServices)+1)
+				for _, svc := range systemdServices {
+					out, err := exec.CommandContext(ctx, "systemctl", "is-active", svc).Output()
+					if err != nil {
+						svcStatus[svc] = "inactive"
+					} else {
+						svcStatus[svc] = strings.TrimSpace(string(out))
+					}
+				}
+				// Direwolf is managed as a subprocess, not systemd
+				svcStatus["direwolf"] = dwRunner.Status()
 				sysStats.SetExternal(func(st *types.SystemStats) {
 					st.Online = connMon.Online()
 					st.BufferDepth = buf.Depth()
 					st.FailedCount = buf.FailedCount()
 					st.LEDState = ledCtrl.GetState()
 					st.Network = connMon.Status()
+					st.Services = svcStatus
 					if pos := gpsReporter.Position(); pos != nil {
 						st.GPSFix = true
 						st.GPSLat = pos.Lat
@@ -304,7 +361,7 @@ func main() {
 	select {
 	case <-done:
 		logger.Info("clean shutdown complete")
-	case <-time.After(10 * time.Second):
+	case <-time.After(20 * time.Second):
 		logger.Warn("shutdown timed out, exiting")
 	}
 
@@ -367,4 +424,35 @@ func writeDebugSnapshot(logger *slog.Logger) error {
 
 	logger.Info("debug snapshot written", "path", dst)
 	return nil
+}
+
+// filteredLogWriter routes subprocess output through slog, suppressing known
+// harmless GTK/GLib warnings from cage/cog.
+type filteredLogWriter struct {
+	logger *slog.Logger
+}
+
+// Known noise from cog/cage/GTK that can be safely suppressed.
+var displayNoisePatterns = []string{
+	"g_application_activate",
+	"g_source_destroy",
+	"handlers connected to the 'activate' signal",
+	"eglQueryDeviceStringEXT",
+	"EGL_BAD_PARAMETER",
+	"Could not determine the accessibility bus",
+}
+
+func (w *filteredLogWriter) Write(p []byte) (int, error) {
+	line := strings.TrimSpace(string(p))
+	if line == "" {
+		return len(p), nil
+	}
+	for _, pattern := range displayNoisePatterns {
+		if strings.Contains(line, pattern) {
+			w.logger.Debug(line)
+			return len(p), nil
+		}
+	}
+	w.logger.Info(line)
+	return len(p), nil
 }

@@ -135,7 +135,6 @@ fi
 # ─── Systemd units ────────────────────────────────────────────────
 log "Installing systemd units..."
 config_file "umbgs.service"            "${SYSTEMD_DIR}/umbgs.service"
-config_file "direwolf.service"         "${SYSTEMD_DIR}/direwolf.service"
 config_file "umbgs-watchdog.service"   "${SYSTEMD_DIR}/umbgs-watchdog.service"
 config_file "umbgs-watchdog.timer"     "${SYSTEMD_DIR}/umbgs-watchdog.timer"
 config_file "umbgs-firstboot.service"  "${SYSTEMD_DIR}/umbgs-firstboot.service"
@@ -152,7 +151,6 @@ log "Enabling services..."
 systemctl daemon-reload
 # NOTE: direwolf is managed by umbgs directly (rtl_fm | direwolf pipeline), not as a systemd service.
 systemctl enable gpsd umbgs umbgs-watchdog.timer umbgs-firstboot.service umbgs-wifi-enable.service
-systemctl disable direwolf 2>/dev/null || true
 
 # ─── Chrony GPS config ───────────────────────────────────────────
 if ! grep -q "SHM 0" /etc/chrony/chrony.conf 2>/dev/null; then
@@ -168,6 +166,10 @@ fi
 # ─── NetworkManager config ────────────────────────────────────────
 log "Configuring NetworkManager..."
 config_file "networkmanager.conf" /etc/NetworkManager/conf.d/umbgs.conf
+
+# Polkit rule so the umbgs service (running as root) can manage NM without interactive auth
+mkdir -p /etc/polkit-1/rules.d
+config_file "99-umbgs-networkmanager.rules" /etc/polkit-1/rules.d/99-umbgs-networkmanager.rules
 
 # ─── System hardening ─────────────────────────────────────────────
 log "Applying system hardening..."
@@ -217,13 +219,82 @@ echo 'REGDOMAIN=US' > /etc/default/crda
 if [ -d /boot/firmware ]; then
     log "Configuring boot firmware..."
 
-    for param in "dtoverlay=disable-bt" "dtparam=audio=on" "disable_splash=1" "auto_initramfs=1"; do
+    # hdmi_force_hotplug=1 keeps HDMI active even when the 7" panel isn't "hot"
+    # at power-on — otherwise Plymouth renders before the display is live and
+    # the splash never shows.
+    for param in \
+        "dtoverlay=disable-bt" \
+        "dtparam=audio=on" \
+        "disable_splash=1" \
+        "auto_initramfs=1" \
+        "hdmi_force_hotplug=1"; do
         grep -qxF "$param" /boot/firmware/config.txt 2>/dev/null || echo "$param" >> /boot/firmware/config.txt
     done
 
+    # The MPI7002 7" touchscreen's EDID lies about supported modes (advertises
+    # 1920x1080) and its internal scaler refuses custom modes, so we render at
+    # the reported 1920x1080 and compensate with CSS zoom in the dashboard.
     if ! grep -q "cfg80211.ieee80211_regdom" /boot/firmware/cmdline.txt 2>/dev/null; then
         sed -i '/^console=/ s/$/ splash logo.nologo vt.global_cursor_default=0 cfg80211.ieee80211_regdom=US/' /boot/firmware/cmdline.txt
     fi
+fi
+
+# ─── Blank cursor theme for kiosk ────────────────────────────────
+# cage/wlroots always draws a pointer when an input device with pointer
+# capability is present (the touchscreen reports as one). There's no flag to
+# disable cursor rendering, so we ship a transparent xcursor theme. Both
+# XCURSOR_THEME=blank (set on the cage process env) AND the system-default
+# /usr/share/icons/default theme are needed — env var alone doesn't work
+# (libxcursor seems to fall back to the system default in some code paths).
+# The cursor must be 24x24: libxcursor rejects 1x1 cursors as invalid and
+# falls through to another theme.
+if [ ! -f /usr/share/icons/blank/cursors/left_ptr ]; then
+    log "Installing blank cursor theme..."
+    mkdir -p /usr/share/icons/blank/cursors /usr/share/icons/default
+    cat > /usr/share/icons/blank/index.theme <<'EOF'
+[Icon Theme]
+Name=blank
+Comment=Invisible cursor theme for kiosk use
+Inherits=core
+EOF
+    cat > /usr/share/icons/blank/cursor.theme <<'EOF'
+[Icon Theme]
+Name=blank
+Inherits=core
+EOF
+    # Make the system default cursor theme inherit from blank so ALL cursor
+    # lookups fall through to transparent, regardless of what theme a client
+    # requests.
+    cat > /usr/share/icons/default/index.theme <<'EOF'
+[Icon Theme]
+Name=Default
+Comment=Default cursor theme (transparent/blank)
+Inherits=blank
+EOF
+    # Generate a 24x24 fully-transparent xcursor file and symlink all common
+    # cursor names to it. Format documented at:
+    # https://www.freedesktop.org/wiki/Specifications/cursor-spec/
+    python3 - <<'PYEOF'
+import os, struct
+W, H = 24, 24
+magic = b'Xcur'
+data  = struct.pack('<4sIII', magic, 16, 0x00010000, 1)                 # file header
+data += struct.pack('<III', 0xfffd0002, W, 28)                           # TOC: type=image, nominal_size=W, offset=28
+data += struct.pack('<IIIIIIIII', 36, 0xfffd0002, W, 1, W, H, 0, 0, 0)   # image header
+data += b'\x00' * (W * H * 4)                                            # all-transparent ARGB pixels
+target = '/usr/share/icons/blank/cursors/left_ptr'
+with open(target, 'wb') as f:
+    f.write(data)
+# Symlink every cursor shape cage/cog might ask for
+names = ['default', 'arrow', 'top_left_arrow', 'left_ptr_watch', 'xterm',
+         'text', 'hand', 'hand1', 'hand2', 'pointer', 'crosshair', 'wait',
+         'progress', 'help', 'not-allowed', 'grab', 'grabbing',
+         'sb_h_double_arrow', 'sb_v_double_arrow', 'fleur', 'move']
+for name in names:
+    link = f'/usr/share/icons/blank/cursors/{name}'
+    if not os.path.exists(link):
+        os.symlink('left_ptr', link)
+PYEOF
 fi
 
 # ─── Plymouth splash screen ──────────────────────────────────────

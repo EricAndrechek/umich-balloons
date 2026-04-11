@@ -197,7 +197,6 @@ ground-station/
 ├── watchdog.sh              # A/B rollback watchdog
 ├── config/                  # Config files copied by install.sh
 │   ├── umbgs.service
-│   ├── direwolf.service
 │   ├── umbgs-watchdog.service
 │   ├── umbgs-watchdog.timer
 │   ├── umbgs-firstboot.service

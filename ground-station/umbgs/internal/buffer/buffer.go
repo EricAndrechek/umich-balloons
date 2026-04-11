@@ -14,7 +14,9 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const dbPath = "/data/buffer.db"
+// DefaultPath is the production database path on the Pi. Tests can pass
+// their own temp path via OpenAt.
+const DefaultPath = "/data/buffer.db"
 
 // Store manages an SQLite database for buffering packets when offline
 // and permanently storing failed packets.
@@ -23,9 +25,14 @@ type Store struct {
 	logger *slog.Logger
 }
 
-// Open creates or opens the buffer database.
+// Open creates or opens the buffer database at the default production path.
 func Open(logger *slog.Logger) (*Store, error) {
-	db, err := sql.Open("sqlite", dbPath+"?_journal_mode=WAL&_busy_timeout=5000")
+	return OpenAt(DefaultPath, logger)
+}
+
+// OpenAt creates or opens the buffer database at a custom path. Used by tests.
+func OpenAt(path string, logger *slog.Logger) (*Store, error) {
+	db, err := sql.Open("sqlite", path+"?_journal_mode=WAL&_busy_timeout=5000")
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)
 	}

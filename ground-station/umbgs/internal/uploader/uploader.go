@@ -6,10 +6,12 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/quic-go/quic-go/http3"
@@ -17,14 +19,44 @@ import (
 
 	"github.com/EricAndrechek/umich-balloons/ground-station/umbgs/internal/buffer"
 	"github.com/EricAndrechek/umich-balloons/ground-station/umbgs/internal/config"
-	"github.com/EricAndrechek/umich-balloons/ground-station/umbgs/internal/connectivity"
 	"github.com/EricAndrechek/umich-balloons/ground-station/umbgs/internal/types"
 )
+
+// OnlineChecker is the minimal interface the uploader needs from the
+// connectivity monitor. Narrowing to an interface makes the uploader
+// testable without spinning up a real NetworkManager D-Bus monitor.
+// *connectivity.Monitor satisfies this.
+type OnlineChecker interface {
+	Online() bool
+}
 
 const (
 	maxRetries     = 3
 	flushBatchSize = 50 // max buffered packets to flush at once
+	// maxErrBody caps how much of a 4xx response body we keep for the failed-packet log.
+	maxErrBody = 512
 )
+
+// permanentError signals that the server rejected the packet with a 4xx status.
+// Retrying will not help — the packet should be recorded as failed, not re-buffered.
+// Typical causes: LoRa packet sent before GPS fix (400 "position 0,0 rejected"),
+// malformed payload, invalid callsign.
+type permanentError struct {
+	status int
+	body   string
+}
+
+func (e *permanentError) Error() string {
+	if e.body != "" {
+		return fmt.Sprintf("HTTP %d: %s", e.status, e.body)
+	}
+	return fmt.Sprintf("HTTP %d", e.status)
+}
+
+func isPermanent(err error) bool {
+	var pe *permanentError
+	return errors.As(err, &pe)
+}
 
 // Uploader reads packets from a channel and uploads them to the API.
 // When offline, packets are buffered in SQLite. On reconnect, buffered
@@ -32,7 +64,7 @@ const (
 type Uploader struct {
 	cfg    *config.Manager
 	buf    *buffer.Store
-	conn   *connectivity.Monitor
+	conn   OnlineChecker
 	in     <-chan types.Packet
 	events chan<- types.PacketEvent
 	logger *slog.Logger
@@ -44,7 +76,7 @@ type Uploader struct {
 func New(
 	cfg *config.Manager,
 	buf *buffer.Store,
-	conn *connectivity.Monitor,
+	conn OnlineChecker,
 	in <-chan types.Packet,
 	events chan<- types.PacketEvent,
 	logger *slog.Logger,
@@ -103,6 +135,17 @@ func (u *Uploader) handlePacket(ctx context.Context, pkt types.Packet) {
 
 	err := u.upload(ctx, pkt)
 	if err != nil {
+		if isPermanent(err) {
+			// Server rejected the packet (4xx). Retrying will not help —
+			// record it in the failed table and move on.
+			u.logger.Warn("packet rejected by server, recording as failed",
+				"source", pkt.Source, "endpoint", pkt.Endpoint, "error", err)
+			if recErr := u.buf.RecordFailure(pkt, err.Error()); recErr != nil {
+				u.logger.Error("failed to record permanent failure", "error", recErr)
+			}
+			u.emitEvent(pkt, types.StatusFailed, err.Error())
+			return
+		}
 		u.logger.Warn("upload failed, buffering", "source", pkt.Source, "error", err)
 		if bufErr := u.buf.Enqueue(pkt); bufErr != nil {
 			u.logger.Error("failed to buffer packet after upload failure", "error", bufErr)
@@ -151,6 +194,10 @@ func (u *Uploader) upload(ctx context.Context, pkt types.Packet) error {
 		if err == nil {
 			return nil
 		}
+		// Permanent errors (4xx) — retrying won't help, surface immediately.
+		if isPermanent(err) {
+			return err
+		}
 		lastErr = err
 		u.logger.Debug("upload attempt failed", "attempt", attempt+1, "error", err)
 	}
@@ -179,10 +226,25 @@ func (u *Uploader) doRequest(ctx context.Context, url string, body []byte) error
 		}
 	}
 	defer resp.Body.Close()
-	io.Copy(io.Discard, resp.Body)
 
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		io.Copy(io.Discard, resp.Body)
 		return nil
+	}
+
+	// Read (and cap) the response body so the error message is useful for
+	// diagnosing why the server rejected the packet.
+	bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrBody))
+	respBody := strings.TrimSpace(string(bodyBytes))
+
+	// 4xx = permanent client error — the packet is malformed or doesn't
+	// meet the API's validation rules (e.g. LoRa before GPS fix). Don't retry.
+	if resp.StatusCode >= 400 && resp.StatusCode < 500 {
+		return &permanentError{status: resp.StatusCode, body: respBody}
+	}
+	// 5xx / everything else = transient, retry.
+	if respBody != "" {
+		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, respBody)
 	}
 	return fmt.Errorf("HTTP %d", resp.StatusCode)
 }
@@ -198,23 +260,43 @@ func (u *Uploader) flushBuffer(ctx context.Context) {
 	}
 
 	u.logger.Info("flushing buffered packets", "count", len(pkts))
-	var uploaded []int64
+	// Both uploaded and permanently-failed packets need to be removed from
+	// the buffered table — the difference is that failed ones also get
+	// recorded in the failed table for dashboard visibility.
+	var toRemove []int64
+	var uploadedCount, failedCount int
 
 	for _, bp := range pkts {
 		err := u.upload(ctx, bp.Pkt)
-		if err != nil {
-			u.logger.Warn("flush upload failed, will retry later", "error", err)
-			break
+		if err == nil {
+			toRemove = append(toRemove, bp.ID)
+			uploadedCount++
+			u.emitEvent(bp.Pkt, types.StatusUploaded, "")
+			continue
 		}
-		uploaded = append(uploaded, bp.ID)
-		u.emitEvent(bp.Pkt, types.StatusUploaded, "")
+		if isPermanent(err) {
+			// Don't retry — move to failed table and continue draining.
+			u.logger.Warn("buffered packet permanently rejected, recording as failed",
+				"source", bp.Pkt.Source, "endpoint", bp.Pkt.Endpoint, "error", err)
+			if recErr := u.buf.RecordFailure(bp.Pkt, err.Error()); recErr != nil {
+				u.logger.Error("failed to record permanent failure during flush", "error", recErr)
+			}
+			toRemove = append(toRemove, bp.ID)
+			failedCount++
+			u.emitEvent(bp.Pkt, types.StatusFailed, err.Error())
+			continue
+		}
+		// Transient error — stop flushing, try again later.
+		u.logger.Warn("flush upload failed, will retry later", "error", err)
+		break
 	}
 
-	if len(uploaded) > 0 {
-		if err := u.buf.Remove(uploaded); err != nil {
+	if len(toRemove) > 0 {
+		if err := u.buf.Remove(toRemove); err != nil {
 			u.logger.Error("failed to remove flushed packets", "error", err)
 		}
-		u.logger.Info("flushed packets", "count", len(uploaded))
+		u.logger.Info("flushed packets",
+			"uploaded", uploadedCount, "failed", failedCount)
 	}
 }
 

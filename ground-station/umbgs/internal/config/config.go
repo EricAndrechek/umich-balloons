@@ -43,11 +43,9 @@ type APRSConfig struct {
 	Frequency float64 `yaml:"frequency" json:"frequency"`
 	Gain      int     `yaml:"gain" json:"gain"`
 	IGServer  string  `yaml:"igserver" json:"igserver"`
-	// Beacon settings for iGate position reporting
-	BeaconComment string  `yaml:"beacon_comment" json:"beacon_comment"`
-	BeaconLat     float64 `yaml:"beacon_lat" json:"beacon_lat"`
-	BeaconLon     float64 `yaml:"beacon_lon" json:"beacon_lon"`
-	BeaconAlt     int     `yaml:"beacon_alt" json:"beacon_alt"`
+	// BeaconComment is the free-text comment sent with the tracker beacon.
+	// Position is pulled live from gpsd at transmit time (see direwolf/config.go).
+	BeaconComment string `yaml:"beacon_comment" json:"beacon_comment"`
 }
 
 type LoRaConfig struct {
@@ -90,9 +88,6 @@ func Defaults() Config {
 			Gain:          0, // 0 = auto gain
 			IGServer:      "noam.aprs2.net",
 			BeaconComment: "UMich Balloons Ground Station",
-			BeaconLat:     42.2943757,
-			BeaconLon:     -83.7110013,
-			BeaconAlt:     271,
 		},
 		LoRa: LoRaConfig{
 			Enabled: true,
@@ -247,14 +242,15 @@ func Save(cfg *Config) error {
 
 // Manager provides thread-safe access to the current config and hot-reload capability.
 type Manager struct {
-	mu   sync.RWMutex
-	cfg  *Config
-	path string
+	mu      sync.RWMutex
+	cfg     *Config
+	path    string
+	version int64 // incremented on every save, used for optimistic concurrency
 }
 
 // NewManager creates a config manager with the given initial config.
 func NewManager(cfg *Config, path string) *Manager {
-	return &Manager{cfg: cfg, path: path}
+	return &Manager{cfg: cfg, path: path, version: 1}
 }
 
 // Get returns a copy of the current config.
@@ -264,15 +260,29 @@ func (m *Manager) Get() Config {
 	return *m.cfg
 }
 
+// Version returns the current config version counter.
+func (m *Manager) Version() int64 {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.version
+}
+
 // Update replaces the config, saves to disk, and returns fields that require a restart.
-func (m *Manager) Update(newCfg *Config) (restartNeeded []string, err error) {
+// If expectedVersion > 0, the update is rejected if it doesn't match the current version
+// (optimistic concurrency control to prevent overwriting concurrent edits).
+func (m *Manager) Update(newCfg *Config, expectedVersion int64) (restartNeeded []string, err error) {
 	if err := newCfg.Validate(); err != nil {
 		return nil, err
 	}
 
 	m.mu.Lock()
+	if expectedVersion > 0 && expectedVersion != m.version {
+		m.mu.Unlock()
+		return nil, fmt.Errorf("config was modified by another session (expected version %d, current %d)", expectedVersion, m.version)
+	}
 	old := m.cfg
 	m.cfg = newCfg
+	m.version++
 	m.mu.Unlock()
 
 	if err := Save(newCfg); err != nil {

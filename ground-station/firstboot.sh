@@ -8,11 +8,6 @@ log() { echo "[umbgs-firstboot] $*"; }
 
 log "=== First boot setup ==="
 
-# ─── Unblock WiFi radio (also done by umbgs on every boot, but belt-and-suspenders) ──
-log "Unblocking WiFi radio..."
-rfkill unblock wifi 2>/dev/null || true
-nmcli radio wifi on 2>/dev/null || true
-
 # ─── Set hostname ─────────────────────────────────────────────────
 CURRENT=$(hostname)
 if [ "$CURRENT" = "raspberrypi" ] || [ "$CURRENT" = "localhost" ]; then

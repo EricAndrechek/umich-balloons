@@ -1,0 +1,6 @@
+# Build artifacts
+umbgs-bin
+umbgs/umbgs
+*.img
+*.img.gz
+output/

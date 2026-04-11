@@ -1,0 +1,8 @@
+// Allow the umbgs service (running as root) to manage NetworkManager
+// without interactive polkit authentication.
+polkit.addRule(function(action, subject) {
+    if (action.id.indexOf("org.freedesktop.NetworkManager.") === 0 &&
+        subject.user === "root") {
+        return polkit.Result.YES;
+    }
+});

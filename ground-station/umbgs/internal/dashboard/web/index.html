@@ -6,150 +6,520 @@
 <title>UMB Ground Station</title>
 <style>
 :root {
-  --bg: #1a1a1a; --panel: #2c2c2c; --border: #4f5254;
-  --text: #e0e0e0; --muted: #a0a0a0;
-  --green: #5cb85c; --amber: #f0ad4e; --red: #d9534f; --blue: #5bc0de;
-  --font: 18px; --mono: 'SF Mono',Monaco,Consolas,monospace;
+  --bg: #111318;
+  --surface: #1c1f26;
+  --surface-raised: #252830;
+  --border: #2e3240;
+  --text: #e2e4e9;
+  --text-muted: #8b8fa3;
+  --text-dim: #5c6070;
+  --accent: #4ade80;
+  --accent-dim: #166534;
+  --warn: #fbbf24;
+  --warn-dim: #78350f;
+  --error: #f87171;
+  --error-dim: #7f1d1d;
+  --info: #60a5fa;
+  --info-dim: #1e3a5f;
+  --radius: 8px;
+  --radius-lg: 12px;
+  --font-mono: 'SF Mono', Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
 }
-* { box-sizing: border-box; margin: 0; padding: 0; }
-html, body { height: 100%; }
+* { box-sizing: border-box; }
+html { height: 100%; }
 body {
-  font-family: -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
-  background: var(--bg); color: var(--text); font-size: var(--font);
-  display: flex; flex-direction: column; overflow: hidden;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  margin: 0; padding: 0;
+  background: var(--bg); color: var(--text);
+  font-size: 16px; line-height: 1.5;
+  display: flex; flex-direction: column; height: 100%; overflow: hidden;
   user-select: none; -webkit-user-select: none;
 }
-#tabs {
-  display: flex; background: #313335; flex-shrink: 0;
-  border-bottom: 1px solid var(--border);
+
+/* --- Nav --- */
+nav {
+  display: flex; background: var(--surface); flex-shrink: 0;
+  border-bottom: 1px solid var(--border); padding: 0 4px;
 }
-.tab {
-  flex: 1; padding: 10px 8px; border: none; background: none;
-  color: var(--muted); font-size: 1em; font-weight: 500;
-  text-align: center; cursor: pointer; border-bottom: 4px solid transparent;
-  min-height: 44px;
+nav button {
+  padding: 12px 14px; border: none; background: none;
+  color: var(--text-muted); cursor: pointer;
+  font-size: 15px; font-weight: 500;
+  flex-grow: 1; text-align: center;
+  border-bottom: 3px solid transparent;
+  transition: color 0.15s, border-color 0.15s;
 }
-.tab:hover { background: #454749; }
-.tab.active { color: var(--text); font-weight: 600; border-bottom-color: var(--green); }
-#main { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; }
-.page { display: none; padding: 12px; height: 100%; overflow-y: auto; }
-.page.active { display: block; }
+nav button:hover { color: var(--text); }
+nav button.active { color: var(--text); font-weight: 600; border-bottom-color: var(--accent); }
+#refreshButton {
+  flex-grow: 0; padding: 12px 16px; font-size: 18px;
+  background: var(--surface-raised); color: var(--text-muted); border: none;
+  border-left: 1px solid var(--border); cursor: pointer;
+}
+#refreshButton:hover { color: var(--text); }
+
+/* --- Main --- */
+main { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+.page { display: none; padding: 16px; height: 100%; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+.page.active { display: flex; flex-direction: column; }
+
+/* --- Overview: Hero --- */
+.hero {
+  text-align: center; padding: 20px 16px 16px;
+  background: linear-gradient(135deg, var(--surface) 0%, var(--surface-raised) 100%);
+  border-radius: var(--radius-lg); border: 1px solid var(--border);
+  margin-bottom: 16px;
+}
+.hero-callsign {
+  font-size: 36px; font-weight: 700; letter-spacing: 2px;
+  font-family: var(--font-mono); color: var(--accent);
+  margin-bottom: 4px;
+}
+.hero-meta { font-size: 13px; color: var(--text-muted); }
+.hero-meta span { margin: 0 8px; }
+
+/* --- Overview: Status Pills --- */
+.status-row {
+  display: flex; gap: 10px; margin-bottom: 16px; flex-wrap: wrap;
+  justify-content: center;
+}
+.pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 14px; border-radius: 20px; font-size: 14px; font-weight: 600;
+  border: 1px solid var(--border);
+}
+.pill .dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  display: inline-block; flex-shrink: 0;
+}
+.pill-ok { background: var(--accent-dim); color: var(--accent); border-color: var(--accent-dim); }
+.pill-ok .dot { background: var(--accent); }
+.pill-warn { background: var(--warn-dim); color: var(--warn); border-color: var(--warn-dim); }
+.pill-warn .dot { background: var(--warn); }
+.pill-err { background: var(--error-dim); color: var(--error); border-color: var(--error-dim); }
+.pill-err .dot { background: var(--error); }
+.pill-muted { background: var(--surface-raised); color: var(--text-muted); }
+.pill-muted .dot { background: var(--text-dim); }
+
+/* --- Overview: Metric Cards --- */
+.grid { display: grid; gap: 12px; }
+.grid-2 { grid-template-columns: 1fr 1fr; }
+.grid-3 { grid-template-columns: 1fr 1fr 1fr; }
 .card {
-  background: var(--panel); border: 1px solid var(--border);
-  border-radius: 6px; padding: 12px; margin-bottom: 12px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius-lg); padding: 16px; position: relative;
+  overflow: hidden;
 }
-.card h3 { font-size: 1em; color: var(--muted); margin-bottom: 8px; }
-.stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-.stat { text-align: center; }
-.stat .val { font-size: 1.6em; font-weight: 700; }
-.stat .label { font-size: .8em; color: var(--muted); }
-.online { color: var(--green); }
-.offline { color: var(--red); }
-.warn { color: var(--amber); }
-#status-dot {
-  display: inline-block; width: 12px; height: 12px;
-  border-radius: 50%; margin-right: 6px; vertical-align: middle;
+.card-label {
+  font-size: 12px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.5px; color: var(--text-muted); margin-bottom: 8px;
 }
-#status-dot.on { background: var(--green); }
-#status-dot.off { background: var(--red); }
-#log-list {
-  font-family: var(--mono); font-size: .85em; line-height: 1.5;
-  max-height: calc(100vh - 120px); overflow-y: auto;
+.card-value { font-size: 28px; font-weight: 700; font-family: var(--font-mono); }
+.card-detail { font-size: 13px; color: var(--text-muted); margin-top: 4px; }
+.bar { background: var(--surface-raised); border-radius: 4px; height: 6px; margin-top: 10px; overflow: hidden; }
+.bar-fill { height: 100%; border-radius: 4px; transition: width 0.5s ease-out; background: var(--accent); }
+.bar-fill.warn { background: var(--warn); }
+.bar-fill.error { background: var(--error); }
+
+/* Network in overview */
+.net-iface { padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 14px; }
+.net-iface:last-child { border-bottom: none; }
+.net-label { font-weight: 600; color: var(--text); }
+.net-detail { color: var(--text-muted); }
+.net-connected { color: var(--accent); }
+.net-disconnected { color: var(--text-dim); }
+.wifi-bars { display: inline-flex; align-items: flex-end; gap: 2px; height: 14px; vertical-align: middle; margin-left: 6px; }
+.wifi-bars span { width: 3px; background: var(--text-dim); border-radius: 1px; }
+.wifi-bars span:nth-child(1) { height: 4px; }
+.wifi-bars span:nth-child(2) { height: 7px; }
+.wifi-bars span:nth-child(3) { height: 10px; }
+.wifi-bars span:nth-child(4) { height: 14px; }
+.wifi-bars.s1 span:nth-child(1) { background: var(--accent); }
+.wifi-bars.s2 span:nth-child(1), .wifi-bars.s2 span:nth-child(2) { background: var(--accent); }
+.wifi-bars.s3 span:nth-child(1), .wifi-bars.s3 span:nth-child(2), .wifi-bars.s3 span:nth-child(3) { background: var(--accent); }
+.wifi-bars.s4 span { background: var(--accent); }
+
+/* Services quick-view */
+.svc-row { display: flex; align-items: center; gap: 8px; padding: 5px 0; font-size: 14px; }
+.svc-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.svc-dot.active, .svc-dot.running { background: var(--accent); }
+.svc-dot.inactive, .svc-dot.stopped, .svc-dot.disabled { background: var(--text-dim); }
+.svc-dot.failed, .svc-dot.error { background: var(--error); }
+.svc-dot.restarting { background: var(--warn); }
+
+/* --- Packets --- */
+#pktContainer { font-family: var(--font-mono); font-size: 14px; flex: 1; overflow-y: auto; min-height: 0; }
+.pkt { padding: 8px 6px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 8px; }
+.pkt .src { font-weight: 600; min-width: 50px; color: var(--info); }
+.pkt .raw { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-muted); }
+.pkt .st { font-size: 12px; padding: 2px 8px; border-radius: 10px; font-weight: 600; }
+.pkt .st.ok { background: var(--accent-dim); color: var(--accent); }
+.pkt .st.buf { background: var(--warn-dim); color: var(--warn); }
+.pkt .st.fail { background: var(--error-dim); color: var(--error); }
+.pkt-empty { color: var(--text-dim); text-align: center; padding: 60px 20px; font-size: 15px; }
+
+/* --- Logs --- */
+.log-toolbar {
+  padding: 8px 12px; background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+  flex-shrink: 0; margin-bottom: 0;
 }
-.log-line { padding: 2px 4px; border-bottom: 1px solid #333; white-space: pre-wrap; word-break: break-all; }
-.log-line.ERROR { color: var(--red); }
-.log-line.WARN { color: var(--amber); }
-.log-line.DEBUG { color: var(--muted); }
-#pkt-list { font-family: var(--mono); font-size: .85em; }
-.pkt {
-  padding: 6px 4px; border-bottom: 1px solid #333;
-  display: flex; justify-content: space-between; align-items: center;
+.log-toolbar label {
+  font-size: 13px; color: var(--text-muted); font-weight: 500; cursor: pointer;
+  display: inline-flex; align-items: center; line-height: 1;
 }
-.pkt .src { font-weight: 600; min-width: 50px; }
-.pkt .raw { flex: 1; margin: 0 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.pkt .st { font-size: .85em; padding: 2px 6px; border-radius: 3px; }
-.pkt .st.ok { background: #2a4a2a; color: var(--green); }
-.pkt .st.buf { background: #4a3a1a; color: var(--amber); }
-.pkt .st.fail { background: #4a1a1a; color: var(--red); }
+.log-toolbar select, .log-toolbar button {
+  padding: 6px 12px; font-size: 13px; background: var(--surface-raised);
+  color: var(--text); border: 1px solid var(--border); border-radius: var(--radius);
+  cursor: pointer; height: 32px; line-height: 1;
+  -webkit-appearance: none; appearance: none;
+}
+.log-toolbar select {
+  padding-right: 28px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%238b8fa3'%3E%3Cpath d='M2 4l4 4 4-4'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 8px center;
+}
+.log-toolbar .spacer { flex: 1; }
+/* --- Service filter dropdown --- */
+.svc-dropdown { position: relative; display: inline-block; }
+.svc-dropdown-btn {
+  padding: 6px 12px; font-size: 13px; background: var(--surface-raised);
+  color: var(--text); border: 1px solid var(--border); border-radius: var(--radius);
+  cursor: pointer; height: 32px; line-height: 1; white-space: nowrap;
+  -webkit-appearance: none; appearance: none;
+  padding-right: 28px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%238b8fa3'%3E%3Cpath d='M2 4l4 4 4-4'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 8px center;
+}
+.svc-dropdown-menu {
+  display: none; position: absolute; top: 100%; left: 0; z-index: 50;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 6px 0; min-width: 180px;
+  max-height: 300px; overflow-y: auto; margin-top: 4px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+}
+.svc-dropdown-menu.open { display: block; }
+.svc-dropdown-menu label {
+  display: flex; align-items: center; padding: 5px 12px; cursor: pointer;
+  font-size: 13px; color: var(--text); white-space: nowrap;
+}
+.svc-dropdown-menu label:hover { background: var(--surface-raised); }
+.svc-dropdown-menu input[type="checkbox"] { margin-right: 8px; transform: scale(1.1); cursor: pointer; }
+.svc-dropdown-actions {
+  display: flex; gap: 6px; padding: 6px 12px; border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+}
+.svc-dropdown-actions button {
+  padding: 3px 8px; font-size: 11px; background: var(--surface-raised);
+  color: var(--text-muted); border: 1px solid var(--border); border-radius: 4px;
+  cursor: pointer;
+}
+.svc-dropdown-actions button:hover { color: var(--text); }
+
+/* Log container + scrollbar */
+.log-wrapper { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
+#logContainer {
+  font-family: var(--font-mono); font-size: 14px; line-height: 1.6;
+  flex: 1; overflow-y: auto; min-height: 0;
+  background: var(--surface); border: 1px solid var(--border);
+  border-top: none; border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+  padding: 4px 8px;
+}
+#logContainer::-webkit-scrollbar { width: 10px; }
+#logContainer::-webkit-scrollbar-track { background: var(--surface); border-radius: 0 0 var(--radius-lg) 0; }
+#logContainer::-webkit-scrollbar-thumb { background: var(--border); border-radius: 5px; border: 2px solid var(--surface); }
+#logContainer::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
+#logContainer { scrollbar-width: thin; scrollbar-color: var(--border) var(--surface); }
+
+/* Jump arrows */
+.log-jump {
+  position: absolute; right: 18px; z-index: 10;
+  width: 36px; height: 36px; border-radius: 50%;
+  background: var(--surface-raised); border: 1px solid var(--border);
+  color: var(--text-muted); cursor: pointer;
+  display: none; align-items: center; justify-content: center;
+  font-size: 18px; box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+  transition: background 0.15s, color 0.15s;
+}
+.log-jump:hover { background: var(--border); color: var(--text); }
+.log-jump.visible { display: flex; }
+#jumpTop { top: 8px; }
+#jumpBottom { bottom: 8px; }
+#jumpBottom.has-new { background: var(--accent-dim); border-color: var(--accent-dim); color: var(--accent); }
+
+/* Log lines */
+.log-line { padding: 1px 4px; white-space: pre-wrap; word-wrap: break-word; border-radius: 2px; display: flex; align-items: baseline; gap: 0; }
+.log-line.hidden { display: none; }
+.log-line .timestamp { color: var(--text-dim); margin-right: 8px; flex-shrink: 0; }
+.log-line .lvl-badge {
+  font-size: 11px; font-weight: 700; margin-right: 8px; flex-shrink: 0;
+  padding: 0 5px; border-radius: 3px; text-transform: uppercase;
+  letter-spacing: 0.3px; min-width: 40px; text-align: center;
+}
+.log-line .lvl-badge.lvl-debug { color: var(--text-dim); background: transparent; }
+.log-line .lvl-badge.lvl-info { color: var(--info); background: var(--info-dim); }
+.log-line .lvl-badge.lvl-warn { color: var(--warn); background: var(--warn-dim); }
+.log-line .lvl-badge.lvl-error { color: var(--error); background: var(--error-dim); }
+.log-line .unit { font-weight: 700; margin-right: 8px; flex-shrink: 0; }
+.log-line .msg { flex: 1; min-width: 0; }
+
+/* Service colors on the unit label */
+.log-line.umbgs .unit { color: var(--accent); }
+.log-line.aprs .unit { color: #93c5fd; }
+.log-line.lora .unit { color: #c4b5fd; }
+.log-line.uploader .unit { color: #67e8f9; }
+.log-line.gps .unit { color: #fcd34d; }
+.log-line.direwolf-runner .unit, .log-line.direwolf .unit { color: var(--info); }
+.log-line.gpsd .unit { color: #86efac; }
+.log-line.chrony .unit { color: #fdba74; }
+.log-line.connectivity .unit, .log-line.network .unit { color: #a5b4fc; }
+.log-line.updater .unit { color: #f9a8d4; }
+.log-line.unknown .unit, .log-line.system .unit { color: var(--text-muted); }
+.log-line .msg { color: var(--text); }
+.log-line.level-error .msg { color: var(--error); font-weight: 600; }
+.log-line.level-warn .msg { color: var(--warn); }
+
+/* Level dropdown color hints */
+#levelFilter option[value="7"] { color: var(--text-dim); }
+#levelFilter option[value="6"] { color: #60a5fa; }
+#levelFilter option[value="4"] { color: #fbbf24; }
+#levelFilter option[value="3"] { color: #f87171; }
+
+/* --- Config --- */
+.config-section {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius-lg); padding: 16px; margin-bottom: 12px;
+}
+.config-section h3 {
+  margin: 0 0 12px; font-size: 14px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted);
+}
 .cfg-field { margin-bottom: 10px; }
-.cfg-field label { display: block; font-size: .85em; color: var(--muted); margin-bottom: 2px; }
+.cfg-field label { display: block; font-size: 13px; color: var(--text-muted); margin-bottom: 4px; }
 .cfg-field input, .cfg-field select {
-  width: 100%; padding: 8px; font-size: 1em;
-  background: #3a3a3a; color: var(--text); border: 1px solid var(--border);
-  border-radius: 4px;
+  width: 100%; padding: 10px 12px; font-size: 15px;
+  background: var(--surface-raised); color: var(--text); border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.cfg-field input:focus, .cfg-field select:focus { outline: none; border-color: var(--accent); }
+.cfg-field input[type="checkbox"] { width: auto; transform: scale(1.3); margin-right: 8px; vertical-align: middle; }
+.cfg-field .checkbox-label { font-size: 15px; color: var(--text); cursor: pointer; }
+.wifi-row { display: flex; gap: 6px; margin-bottom: 8px; align-items: center; }
+.wifi-row input {
+  flex: 1; padding: 10px 12px; font-size: 15px;
+  background: var(--surface-raised); color: var(--text); border: 1px solid var(--border);
+  border-radius: var(--radius);
 }
 .btn {
-  padding: 10px 20px; font-size: 1em; border: none; border-radius: 4px;
+  padding: 10px 18px; font-size: 15px; border: none; border-radius: var(--radius);
   cursor: pointer; font-weight: 600;
 }
-.btn-primary { background: var(--green); color: #fff; }
-.btn-danger { background: var(--red); color: #fff; }
-.svc-row { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid #333; }
-.svc-row .name { font-weight: 600; }
-.svc-row .status { font-size: .85em; }
+.btn-primary { background: var(--accent); color: #111; }
+.btn-primary:hover { background: #22c55e; }
+.btn-secondary { background: var(--surface-raised); color: var(--text); border: 1px solid var(--border); }
+.btn-secondary:hover { background: #353840; }
+.btn-danger { background: var(--error); color: #fff; }
+.btn-danger:hover { background: #ef4444; }
+.btn-small { padding: 6px 12px; font-size: 13px; }
+#cfgStatus { font-size: 13px; font-style: italic; color: var(--text-muted); margin-top: 10px; }
+#cfgConflict {
+  display: none; background: var(--warn-dim); border: 1px solid #854d0e;
+  border-radius: var(--radius); padding: 10px 16px; margin-bottom: 12px;
+  color: var(--warn); font-size: 14px;
+}
+#cfgConflict button { margin-left: 10px; }
+
+/* --- Admin --- */
+.admin-section {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius-lg); padding: 16px; margin-bottom: 12px;
+}
+.admin-section h3 {
+  margin: 0 0 12px; font-size: 14px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted);
+}
+.service-item {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 12px; border-radius: var(--radius); margin-bottom: 6px;
+  background: var(--surface-raised);
+}
+.service-name { font-weight: 600; font-size: 15px; flex: 1; }
+.service-badge {
+  padding: 3px 10px; border-radius: 12px; font-size: 12px;
+  font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px;
+}
+.badge-active, .badge-running { background: var(--accent-dim); color: var(--accent); }
+.badge-inactive, .badge-stopped, .badge-disabled { background: var(--surface); color: var(--text-dim); }
+.badge-failed, .badge-error { background: var(--error-dim); color: var(--error); }
+.badge-restarting { background: var(--warn-dim); color: var(--warn); }
+.restart-btn {
+  padding: 6px 14px; font-size: 13px; background: var(--surface);
+  color: var(--text-muted); border: 1px solid var(--border); border-radius: var(--radius);
+  cursor: pointer;
+}
+.restart-btn:hover { background: var(--border); color: var(--text); }
+.restart-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.restart-status { font-size: 12px; color: var(--text-muted); font-style: italic; }
+#crashLogContainer {
+  font-family: var(--font-mono); font-size: 13px;
+  background: var(--surface-raised); border: 1px solid var(--border);
+  padding: 10px; max-height: 400px; overflow-y: auto;
+  white-space: pre-wrap; word-wrap: break-word; margin-top: 10px;
+  border-radius: var(--radius); color: var(--text-muted);
+}
+.crash-controls {
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+}
+.crash-controls label { font-size: 14px; color: var(--text-muted); }
+.crash-controls select, .crash-controls button {
+  padding: 8px 14px; font-size: 14px; background: var(--surface-raised);
+  color: var(--text); border: 1px solid var(--border); border-radius: var(--radius);
+}
+#crashLogStatus { margin-top: 8px; font-style: italic; font-size: 13px; color: var(--text-muted); }
+#updateStatus { margin-top: 8px; font-size: 13px; font-style: italic; color: var(--text-muted); }
+
+/* --- Status Bar --- */
+#statusBar {
+  position: fixed; bottom: 0; left: 0; right: 0;
+  padding: 6px 12px; text-align: center;
+  font-size: 13px; color: var(--text-dim);
+  background: var(--surface); z-index: 10;
+  border-top: 1px solid var(--border);
+}
+.bar-error { color: var(--error) !important; font-weight: 600; }
+.bar-ok { color: var(--accent) !important; }
+body.scrolling * { pointer-events: none; }
+
+/* --- Reconnecting overlay --- */
+#reconnectOverlay {
+  display: none; position: fixed; inset: 0; z-index: 100;
+  background: rgba(17,19,24,0.92);
+  flex-direction: column; align-items: center; justify-content: center;
+  gap: 16px;
+}
+#reconnectOverlay.visible { display: flex; }
+#reconnectOverlay .spinner {
+  width: 40px; height: 40px; border: 4px solid var(--border);
+  border-top-color: var(--accent); border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+#reconnectOverlay .label { font-size: 18px; color: var(--text-muted); font-weight: 500; }
+
+/* --- Hide cursor in kiosk mode (Pi touchscreen) --- */
+body.kiosk-mode, body.kiosk-mode *, body.kiosk-mode *::before, body.kiosk-mode *::after {
+  cursor: none !important;
+}
+
+/* --- Pi 7" MPI7002 touchscreen ---
+ * The panel is physically 1024x600 but its EDID lies and reports 1920x1080;
+ * the display's internal scaler downscales whatever the Pi sends to panel
+ * pixels. vc4 rejects custom video= modes on this EDID, so we have to live
+ * with a 1920x1080 framebuffer and compensate with CSS zoom. A zoom of 2.5
+ * makes content visually similar in size to a desktop 1280-wide layout on a
+ * 7" panel — comfortable at arm's length for the touchscreen.
+ * Uses a JS class on body instead of media query so it only kicks in for
+ * cog/kiosk, not phones loading the same URL. */
+body.kiosk-mode { zoom: 2.5; }
 </style>
 </head>
 <body>
-<div id="tabs">
-  <button class="tab active" data-page="overview">Overview</button>
-  <button class="tab" data-page="packets">Packets</button>
-  <button class="tab" data-page="logs">Logs</button>
-  <button class="tab" data-page="config">Config</button>
-</div>
-<div id="main">
-  <!-- Overview -->
+<nav>
+  <button class="tab-button active" data-tab="overview">Overview</button>
+  <button class="tab-button" data-tab="packets">Packets</button>
+  <button class="tab-button" data-tab="logs">Logs</button>
+  <button class="tab-button" data-tab="config">Config</button>
+  <button class="tab-button" data-tab="admin">Admin</button>
+  <button id="refreshButton" title="Refresh Page">&#8635;</button>
+</nav>
+
+<main>
+  <!-- ==================== OVERVIEW ==================== -->
   <div id="overview" class="page active">
-    <div class="card">
-      <h3><span id="status-dot" class="off"></span> Station Status</h3>
-      <div class="stat-grid">
-        <div class="stat"><div class="val" id="s-callsign">--</div><div class="label">Callsign</div></div>
-        <div class="stat"><div class="val" id="s-online">--</div><div class="label">Connectivity</div></div>
-        <div class="stat"><div class="val" id="s-uptime">--</div><div class="label">Uptime</div></div>
-        <div class="stat"><div class="val" id="s-version">--</div><div class="label">Version</div></div>
+    <div class="hero">
+      <div class="hero-callsign" id="sysCallsign">--</div>
+      <div class="hero-meta">
+        <span id="sysVersion">--</span>
+        <span>|</span>
+        <span>Up <span id="sysUptime">--</span></span>
       </div>
     </div>
-    <div class="card">
-      <h3>System</h3>
-      <div class="stat-grid">
-        <div class="stat"><div class="val" id="s-cpu">--</div><div class="label">CPU %</div></div>
-        <div class="stat"><div class="val" id="s-ram">--</div><div class="label">RAM %</div></div>
-        <div class="stat"><div class="val" id="s-temp">--</div><div class="label">Temp °C</div></div>
-        <div class="stat"><div class="val" id="s-led">--</div><div class="label">LED</div></div>
+
+    <div class="status-row" id="statusPills">
+      <span class="pill pill-muted" id="pillOnline"><span class="dot"></span>Offline</span>
+      <span class="pill pill-muted" id="pillGps"><span class="dot"></span>GPS: No fix</span>
+      <span class="pill pill-muted" id="pillBuffer"><span class="dot"></span>Buffer: 0</span>
+    </div>
+
+    <div class="grid grid-3" style="margin-bottom:12px;">
+      <div class="card">
+        <div class="card-label">CPU</div>
+        <div class="card-value" id="cpuValue">--%</div>
+        <div class="bar"><div class="bar-fill" id="cpuBar" style="width:0%"></div></div>
+      </div>
+      <div class="card">
+        <div class="card-label">Memory</div>
+        <div class="card-value" id="ramValue">--%</div>
+        <div class="bar"><div class="bar-fill" id="ramBar" style="width:0%"></div></div>
+        <div class="card-detail" id="ramDetail">-- / -- GB</div>
+      </div>
+      <div class="card">
+        <div class="card-label">Temperature</div>
+        <div class="card-value" id="tempValue">--&deg;C</div>
       </div>
     </div>
-    <div class="card">
-      <h3>GPS</h3>
-      <div class="stat-grid">
-        <div class="stat"><div class="val" id="s-gps">--</div><div class="label">Fix</div></div>
-        <div class="stat"><div class="val" id="s-alt">--</div><div class="label">Alt (m)</div></div>
-        <div class="stat"><div class="val" id="s-lat">--</div><div class="label">Lat</div></div>
-        <div class="stat"><div class="val" id="s-lon">--</div><div class="label">Lon</div></div>
+
+    <div class="grid grid-2">
+      <div class="card">
+        <div class="card-label">Network</div>
+        <div id="networkStatus" style="font-size:14px;">Loading...</div>
       </div>
-    </div>
-    <div class="card">
-      <h3>Network</h3>
-      <div id="s-net-list" style="font-size:.9em;"></div>
-    </div>
-    <div class="card">
-      <h3>Buffer</h3>
-      <div class="stat-grid">
-        <div class="stat"><div class="val" id="s-buf">0</div><div class="label">Queued</div></div>
-        <div class="stat"><div class="val" id="s-fail">0</div><div class="label">Failed</div></div>
+      <div class="card">
+        <div class="card-label">Services</div>
+        <div id="svcQuickView"><span style="color:var(--text-dim);font-size:14px;">Waiting...</span></div>
       </div>
     </div>
   </div>
-  <!-- Packets -->
+
+  <!-- ==================== PACKETS ==================== -->
   <div id="packets" class="page">
-    <div id="pkt-list"></div>
-    <p id="pkt-empty" style="color:var(--muted);text-align:center;padding:40px;">Waiting for packets...</p>
+    <div id="pktContainer"></div>
+    <div id="pktEmpty" class="pkt-empty">Waiting for packets...</div>
   </div>
-  <!-- Logs -->
+
+  <!-- ==================== LOGS ==================== -->
   <div id="logs" class="page">
-    <div id="log-list"></div>
+    <div class="log-toolbar">
+      <div class="svc-dropdown">
+        <button class="svc-dropdown-btn" id="svcDropdownBtn">Services</button>
+        <div class="svc-dropdown-menu" id="svcDropdownMenu">
+          <div class="svc-dropdown-actions">
+            <button id="svcAll">All</button>
+            <button id="svcNone">None</button>
+          </div>
+          <div id="serviceFilters"></div>
+        </div>
+      </div>
+      <select id="levelFilter"></select>
+      <div class="spacer"></div>
+      <button id="pauseBtn">Pause</button>
+      <button id="clearBtn">Clear</button>
+    </div>
+    <div class="log-wrapper">
+      <button class="log-jump" id="jumpTop" title="Jump to top">&#8593;</button>
+      <button class="log-jump" id="jumpBottom" title="Jump to bottom">&#8595;</button>
+      <div id="logContainer"></div>
+    </div>
   </div>
-  <!-- Config -->
+
+  <!-- ==================== CONFIG ==================== -->
   <div id="config" class="page">
-    <div class="card" id="cfg-general">
+    <div id="cfgConflict">
+      Configuration was updated by another session.
+      <button class="btn btn-secondary btn-small" id="cfgReloadBtn">Reload</button>
+    </div>
+    <div class="config-section">
       <h3>General</h3>
       <div class="cfg-field"><label>Callsign</label><input type="text" id="cfg-callsign"></div>
       <div class="cfg-field"><label>SSID (0-15)</label><input type="number" id="cfg-ssid" min="0" max="15"></div>
@@ -158,65 +528,171 @@ body {
         <select id="cfg-log_level"><option>debug</option><option>info</option><option>warn</option><option>error</option></select>
       </div>
     </div>
-    <div class="card" id="cfg-wifi-card">
+    <div class="config-section">
       <h3>WiFi Networks</h3>
       <div id="cfg-wifi-list"></div>
-      <button class="btn" style="margin-top:8px;background:#555;" onclick="addWifiRow('','')">+ Add Network</button>
+      <button class="btn btn-secondary btn-small" id="addWifiBtn">+ Add Network</button>
     </div>
-    <div class="card">
+    <div class="config-section">
       <h3>APRS</h3>
-      <div class="cfg-field"><label><input type="checkbox" id="cfg-aprs-enabled"> Enabled</label></div>
+      <div class="cfg-field"><label class="checkbox-label"><input type="checkbox" id="cfg-aprs-enabled"> Enabled</label></div>
       <div class="cfg-field"><label>Frequency (MHz)</label><input type="number" id="cfg-aprs-freq" step="0.001"></div>
-      <div class="cfg-field"><label>RTL-SDR Gain (0=auto, 1-49)</label><input type="number" id="cfg-aprs-gain" min="0" max="49"></div>
+      <div class="cfg-field"><label>RTL-SDR Gain (0 = auto)</label><input type="number" id="cfg-aprs-gain" min="0" max="49"></div>
       <div class="cfg-field"><label>APRS-IS Server</label><input type="text" id="cfg-aprs-igserver"></div>
+      <div class="cfg-field"><label>Beacon Comment</label><input type="text" id="cfg-aprs-comment"></div>
     </div>
-    <div class="card">
+    <div class="config-section">
       <h3>LoRa</h3>
-      <div class="cfg-field"><label><input type="checkbox" id="cfg-lora-enabled"> Enabled</label></div>
+      <div class="cfg-field"><label class="checkbox-label"><input type="checkbox" id="cfg-lora-enabled"> Enabled</label></div>
       <div class="cfg-field"><label>Baud Rate</label><input type="number" id="cfg-lora-baud"></div>
-      <div class="cfg-field"><label>Device (blank=auto)</label><input type="text" id="cfg-lora-device" placeholder="/dev/ttyUSB0"></div>
+      <div class="cfg-field"><label>Device (blank = auto-detect)</label><input type="text" id="cfg-lora-device" placeholder="/dev/ttyUSB0"></div>
     </div>
-    <div class="card">
+    <div class="config-section">
       <h3>GPS</h3>
-      <div class="cfg-field"><label><input type="checkbox" id="cfg-gps-enabled"> Enabled</label></div>
-      <div class="cfg-field"><label>Report Interval (sec)</label><input type="number" id="cfg-gps-interval" min="1"></div>
+      <div class="cfg-field"><label class="checkbox-label"><input type="checkbox" id="cfg-gps-enabled"> Enabled</label></div>
+      <div class="cfg-field"><label>Report Interval (seconds)</label><input type="number" id="cfg-gps-interval" min="1"></div>
     </div>
-    <div class="card">
-      <h3>Display</h3>
-      <div class="cfg-field"><label><input type="checkbox" id="cfg-display-enabled"> Kiosk Mode Enabled</label></div>
-      <div class="cfg-field"><label>URL (blank=dashboard)</label><input type="text" id="cfg-display-url" placeholder="http://localhost:8080"></div>
+    <div class="config-section">
+      <h3>Attached Display</h3>
+      <div class="cfg-field"><label class="checkbox-label"><input type="checkbox" id="cfg-display-enabled"> Enable kiosk browser on attached screen</label></div>
+      <div class="cfg-field"><label>URL (blank = this dashboard)</label><input type="text" id="cfg-display-url" placeholder="http://localhost:8080"></div>
     </div>
-    <div style="display:flex;gap:8px;margin-top:8px;">
-      <button class="btn btn-primary" onclick="saveConfig()">Save Configuration</button>
-      <button class="btn btn-danger" onclick="if(confirm('Reboot the ground station?'))fetch('/api/update',{method:'POST'})">Check Update</button>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;">
+      <button class="btn btn-primary" id="saveConfigBtn">Save Configuration</button>
     </div>
-    <p id="cfg-status" style="color:var(--muted);font-size:.85em;margin-top:8px;"></p>
+    <div id="cfgStatus"></div>
   </div>
-</div>
-<script>
-(function(){
-  const MAX_LOGS = 500, MAX_PKTS = 200;
-  let ws, reconnTimer;
 
-  // Tabs
-  document.querySelectorAll('.tab').forEach(t => {
-    t.addEventListener('click', () => {
-      document.querySelectorAll('.tab').forEach(b => b.classList.remove('active'));
-      document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-      t.classList.add('active');
-      document.getElementById(t.dataset.page).classList.add('active');
+  <!-- ==================== ADMIN ==================== -->
+  <div id="admin" class="page">
+    <div class="admin-section">
+      <h3>Services</h3>
+      <div id="serviceList"><span style="color:var(--text-dim);font-size:14px;">Waiting for status data...</span></div>
+    </div>
+
+    <div class="admin-section">
+      <h3>Previous Boot Logs</h3>
+      <div class="crash-controls">
+        <label for="bootSelect">Boot:</label>
+        <select id="bootSelect">
+          <option value="-1">Last Boot</option>
+          <option value="-2">Boot -2</option>
+          <option value="-3">Boot -3</option>
+          <option value="-4">Boot -4</option>
+        </select>
+        <label for="crashLines">Lines:</label>
+        <select id="crashLines">
+          <option value="100">100</option>
+          <option value="250" selected>250</option>
+          <option value="500">500</option>
+          <option value="1000">1000</option>
+        </select>
+        <button id="fetchCrashBtn">Fetch</button>
+      </div>
+      <div id="crashLogContainer">Select boot offset and press Fetch.</div>
+      <div id="crashLogStatus"></div>
+    </div>
+
+    <div class="admin-section">
+      <h3>Software Update</h3>
+      <button class="btn btn-secondary" id="checkUpdateBtn">Check for Updates</button>
+      <div id="updateStatus"></div>
+    </div>
+
+    <div class="admin-section">
+      <h3>Reboot</h3>
+      <p style="color:var(--text-muted);margin:0 0 12px;font-size:14px;">This will restart the ground station. All active connections will be lost.</p>
+      <button class="btn btn-danger" id="rebootButton" style="font-size:16px;padding:14px 28px;">Reboot Ground Station</button>
+      <div id="rebootStatus" style="margin-top:8px;font-style:italic;font-size:14px;"></div>
+    </div>
+  </div>
+</main>
+
+<div id="reconnectOverlay"><div class="spinner"></div><div class="label">Reconnecting...</div></div>
+<div id="statusBar">Connecting...</div>
+
+<script>
+(function() {
+  'use strict';
+
+  var MAX_LOG_LINES = 500;
+  var MAX_PACKETS = 200;
+  var RECONNECT_DELAY = 2000;
+  // Services that appear in logs — umbgs subsystems + external
+  var knownServices = ['aprs', 'lora', 'uploader', 'gps', 'direwolf-runner', 'direwolf', 'gpsd', 'chrony', 'connectivity', 'network', 'updater', 'umbgs'];
+
+  var ws = null, reconnTimer = null, paused = false, autoScroll = true, scrollTimeout;
+  var activeServices = new Set(knownServices);
+  var minLogLevel = 6;
+  var latestStats = null;
+  var configVersion = 0;
+
+  // Register service worker for offline support
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/sw.js').catch(function() {});
+  }
+
+  // Detect Pi kiosk mode via URL parameter set by umbgs when launching cog.
+  if (location.search.indexOf('kiosk=1') !== -1) {
+    document.body.classList.add('kiosk-mode');
+  }
+
+  var logContainer = document.getElementById('logContainer');
+  var statusBar = document.getElementById('statusBar');
+  var pauseBtn = document.getElementById('pauseBtn');
+  var clearBtn = document.getElementById('clearBtn');
+  var jumpTop = document.getElementById('jumpTop');
+  var jumpBottom = document.getElementById('jumpBottom');
+  var levelFilter = document.getElementById('levelFilter');
+  var serviceFiltersEl = document.getElementById('serviceFilters');
+  var networkStatusDiv = document.getElementById('networkStatus');
+  var pktContainer = document.getElementById('pktContainer');
+  var pktEmpty = document.getElementById('pktEmpty');
+  var newWhilePaused = false;
+
+  // --- Tabs ---
+  document.querySelectorAll('nav button[data-tab]').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      document.querySelectorAll('nav button').forEach(function(b) { b.classList.remove('active'); });
+      document.querySelectorAll('.page').forEach(function(p) { p.classList.remove('active'); });
+      btn.classList.add('active');
+      document.getElementById(btn.dataset.tab).classList.add('active');
     });
   });
+  document.getElementById('refreshButton').onclick = function() { location.reload(true); };
 
+  var overlay = document.getElementById('reconnectOverlay');
+  var overlayLabel = overlay.querySelector('.label');
+  var wasConnected = false;
+  var expectingDisconnect = false;
+
+  function showOverlay(msg) {
+    overlayLabel.textContent = msg || 'Reconnecting...';
+    overlay.classList.add('visible');
+  }
+  function hideOverlay() { overlay.classList.remove('visible'); }
+
+  // --- WebSocket ---
   function connect() {
-    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
     ws = new WebSocket(proto + '//' + location.host + '/ws');
-    ws.onopen = () => { clearTimeout(reconnTimer); };
-    ws.onclose = () => { reconnTimer = setTimeout(connect, 3000); };
-    ws.onerror = () => { ws.close(); };
-    ws.onmessage = (e) => {
-      try { handleMsg(JSON.parse(e.data)); } catch(err) { console.error(err); }
+    ws.onopen = function() {
+      clearTimeout(reconnTimer);
+      hideOverlay();
+      if (wasConnected) setStatus('Reconnected', false, true);
+      else setStatus('Connected', false, true);
+      wasConnected = true;
+      expectingDisconnect = false;
     };
+    ws.onclose = function() {
+      ws = null;
+      if (wasConnected) {
+        showOverlay(expectingDisconnect ? 'Restarting service...' : 'Reconnecting...');
+      }
+      reconnTimer = setTimeout(connect, RECONNECT_DELAY);
+    };
+    ws.onerror = function() { if (ws) ws.close(); };
+    ws.onmessage = function(e) { try { handleMsg(JSON.parse(e.data)); } catch(err) { console.error('WS:', err); } };
   }
 
   function handleMsg(msg) {
@@ -224,155 +700,494 @@ body {
       case 'stats': updateStats(msg.data); break;
       case 'packet': addPacket(msg.data); break;
       case 'log': addLog(msg.data); break;
+      case 'config': handleConfigBroadcast(msg.data); break;
     }
   }
 
+  function setStatus(message, isError, isOK) {
+    statusBar.textContent = message;
+    statusBar.className = '';
+    if (isError) statusBar.classList.add('bar-error');
+    if (isOK) {
+      statusBar.classList.add('bar-ok');
+      var msgSnapshot = message;
+      setTimeout(function() { if (statusBar.textContent === msgSnapshot) statusBar.textContent = ''; }, 3000);
+    }
+  }
+
+  // --- Stats ---
   function updateStats(s) {
-    const dot = document.getElementById('status-dot');
-    dot.className = s.online ? 'on' : 'off';
-    setText('s-online', s.online ? 'Online' : 'Offline');
-    document.getElementById('s-online').className = 'val ' + (s.online ? 'online' : 'offline');
-    setText('s-cpu', s.cpu_percent.toFixed(1));
-    setText('s-ram', s.ram_percent.toFixed(1));
-    setText('s-temp', s.cpu_temp_c.toFixed(1));
-    setText('s-uptime', fmtUptime(s.uptime_seconds));
-    setText('s-version', s.version || '--');
-    setText('s-led', s.led_state || '--');
-    setText('s-buf', s.buffer_depth);
-    setText('s-fail', s.failed_count);
-    const bufEl = document.getElementById('s-buf');
-    bufEl.className = 'val' + (s.buffer_depth > 0 ? ' warn' : '');
-    const failEl = document.getElementById('s-fail');
-    failEl.className = 'val' + (s.failed_count > 0 ? ' offline' : '');
-    setText('s-gps', s.gps_fix ? 'Yes' : 'No');
-    document.getElementById('s-gps').className = 'val ' + (s.gps_fix ? 'online' : 'muted');
-    setText('s-lat', s.gps_fix ? s.gps_lat.toFixed(6) : '--');
-    setText('s-lon', s.gps_fix ? s.gps_lon.toFixed(6) : '--');
-    setText('s-alt', s.gps_fix ? s.gps_alt.toFixed(1) : '--');
-    // Network interfaces
-    const netList = document.getElementById('s-net-list');
-    if (s.network?.interfaces?.length) {
-      netList.innerHTML = s.network.interfaces.map(i => {
-        const icon = i.type === 'wifi' ? '&#x1F4F6;' : '&#x1F50C;';
-        const detail = i.state === 'connected'
-          ? (i.type === 'wifi'
-            ? '<span class="online">' + esc(i.ssid || '?') + '</span> ' + (i.signal||0) + '% — ' + (i.ip||'no IP')
-            : '<span class="online">Connected</span> — ' + (i.ip||'no IP'))
-          : '<span class="muted">Disconnected</span>';
-        return '<div style="padding:4px 0;border-bottom:1px solid #333;">' + icon + ' <b>' + esc(i.name) + '</b> (' + i.type + ') ' + detail + '</div>';
-      }).join('');
+    latestStats = s;
+
+    // Hero
+    if (s.version) document.getElementById('sysVersion').textContent = 'v' + s.version;
+    document.getElementById('sysUptime').textContent = fmtUptime(s.uptime_seconds);
+
+    // Status pills
+    var pillOnline = document.getElementById('pillOnline');
+    if (s.online) {
+      pillOnline.className = 'pill pill-ok';
+      pillOnline.innerHTML = '<span class="dot"></span>Online';
     } else {
-      netList.innerHTML = '<span class="muted">No interfaces detected</span>';
+      pillOnline.className = 'pill pill-err';
+      pillOnline.innerHTML = '<span class="dot"></span>Offline';
+    }
+
+    var pillGps = document.getElementById('pillGps');
+    if (s.gps_fix) {
+      pillGps.className = 'pill pill-ok';
+      pillGps.innerHTML = '<span class="dot"></span>GPS: ' + s.gps_lat.toFixed(4) + ', ' + s.gps_lon.toFixed(4);
+    } else {
+      pillGps.className = 'pill pill-muted';
+      pillGps.innerHTML = '<span class="dot"></span>GPS: No fix';
+    }
+
+    var pillBuf = document.getElementById('pillBuffer');
+    var bufTotal = (s.buffer_depth || 0) + (s.failed_count || 0);
+    if (s.failed_count > 0) {
+      pillBuf.className = 'pill pill-err';
+      pillBuf.innerHTML = '<span class="dot"></span>Failed: ' + s.failed_count;
+    } else if (s.buffer_depth > 0) {
+      pillBuf.className = 'pill pill-warn';
+      pillBuf.innerHTML = '<span class="dot"></span>Buffered: ' + s.buffer_depth;
+    } else {
+      pillBuf.className = 'pill pill-ok';
+      pillBuf.innerHTML = '<span class="dot"></span>Buffer: clear';
+    }
+
+    // Metric cards
+    var cpu = s.cpu_percent != null ? s.cpu_percent : 0;
+    document.getElementById('cpuValue').textContent = cpu.toFixed(0) + '%';
+    var cpuBar = document.getElementById('cpuBar');
+    cpuBar.style.width = cpu + '%';
+    cpuBar.className = 'bar-fill' + (cpu > 90 ? ' error' : cpu > 70 ? ' warn' : '');
+
+    var ram = s.ram_percent != null ? s.ram_percent : 0;
+    document.getElementById('ramValue').textContent = ram.toFixed(0) + '%';
+    var ramBar = document.getElementById('ramBar');
+    ramBar.style.width = ram + '%';
+    ramBar.className = 'bar-fill' + (ram > 90 ? ' error' : ram > 70 ? ' warn' : '');
+    document.getElementById('ramDetail').textContent =
+      (s.ram_used_mb != null ? (s.ram_used_mb / 1024).toFixed(1) : '--') + ' / ' +
+      (s.ram_total_mb != null ? (s.ram_total_mb / 1024).toFixed(1) : '--') + ' GB';
+
+    var temp = s.cpu_temp_c != null ? s.cpu_temp_c : 0;
+    var tempEl = document.getElementById('tempValue');
+    tempEl.innerHTML = temp.toFixed(1) + '&deg;C';
+    tempEl.style.color = temp > 80 ? 'var(--error)' : temp > 65 ? 'var(--warn)' : '';
+
+    updateNetwork(s.network);
+
+    // Quick service view on overview
+    if (s.services) {
+      updateSvcQuickView(s.services);
+      updateServiceDisplay(s.services);
     }
   }
 
-  function addPacket(evt) {
-    const list = document.getElementById('pkt-list');
-    const empty = document.getElementById('pkt-empty');
-    if (empty) empty.style.display = 'none';
-    const p = evt.packet || evt.Packet || {};
-    const status = evt.status !== undefined ? evt.status : evt.Status;
-    const stClass = status === 0 ? 'ok' : status === 2 ? 'buf' : 'fail';
-    const stText = status === 0 ? 'OK' : status === 2 ? 'BUF' : 'FAIL';
-    const div = document.createElement('div');
-    div.className = 'pkt';
-    div.innerHTML = '<span class="src">' + esc(p.Source || p.source || '?') + '</span>' +
-      '<span class="raw">' + esc(p.RawData || p.raw_data || '') + '</span>' +
-      '<span class="st ' + stClass + '">' + stText + '</span>';
-    list.insertBefore(div, list.firstChild);
-    while (list.children.length > MAX_PKTS) list.removeChild(list.lastChild);
+  function updateNetwork(net) {
+    if (!net) { networkStatusDiv.innerHTML = '<span style="color:var(--text-dim)">No data</span>'; return; }
+    var ifaces = net.interfaces || [];
+    if (!ifaces.length) { networkStatusDiv.innerHTML = '<span style="color:var(--text-dim)">No interfaces</span>'; return; }
+    var html = '';
+    for (var i = 0; i < ifaces.length; i++) {
+      var f = ifaces[i];
+      html += '<div class="net-iface"><span class="net-label">' + esc(f.name) + '</span> ';
+      if (f.state === 'connected') {
+        if (f.type === 'wifi') {
+          var sig = f.signal || 0;
+          var bars = sig > 75 ? 4 : sig > 50 ? 3 : sig > 25 ? 2 : sig > 5 ? 1 : 0;
+          html += '<span class="net-connected">' + esc(f.ssid || '?') + '</span>';
+          html += '<span class="wifi-bars s' + bars + '"><span></span><span></span><span></span><span></span></span>';
+          html += ' <span class="net-detail">' + (f.ip || 'no IP') + '</span>';
+        } else {
+          html += '<span class="net-connected">Connected</span>';
+          html += ' <span class="net-detail">' + (f.ip || 'no IP') + '</span>';
+        }
+      } else {
+        html += '<span class="net-disconnected">Disconnected</span>';
+      }
+      html += '</div>';
+    }
+    networkStatusDiv.innerHTML = html;
+  }
+
+  function updateSvcQuickView(services) {
+    var el = document.getElementById('svcQuickView');
+    var html = '';
+    var keys = Object.keys(services);
+    for (var i = 0; i < keys.length; i++) {
+      var name = keys[i];
+      var st = services[name];
+      html += '<div class="svc-row"><span class="svc-dot ' + st + '"></span>' + name + '</div>';
+    }
+    el.innerHTML = html;
+  }
+
+  // --- Admin: Full service display ---
+  var restartableServices = { 'umbgs': true, 'gpsd': true, 'chrony': true };
+
+  function updateServiceDisplay(services) {
+    var container = document.getElementById('serviceList');
+    var keys = Object.keys(services);
+    if (!keys.length) { container.innerHTML = '<span style="color:var(--text-dim)">No services.</span>'; return; }
+
+    var existing = container.querySelectorAll('.service-item');
+    var map = {};
+    existing.forEach(function(el) { map[el.dataset.name] = el; });
+
+    keys.forEach(function(name) {
+      var status = services[name];
+      var item = map[name];
+      if (!item) {
+        item = document.createElement('div');
+        item.className = 'service-item';
+        item.dataset.name = name;
+
+        var nameEl = document.createElement('span');
+        nameEl.className = 'service-name';
+        nameEl.textContent = name === 'direwolf' ? 'direwolf (subprocess)' : name;
+        item.appendChild(nameEl);
+
+        var badge = document.createElement('span');
+        badge.className = 'service-badge badge-' + status;
+        badge.textContent = status;
+        item.appendChild(badge);
+
+        if (restartableServices[name]) {
+          var btn = document.createElement('button');
+          btn.className = 'restart-btn';
+          btn.textContent = 'Restart';
+          var stEl = document.createElement('span');
+          stEl.className = 'restart-status';
+          btn.onclick = function() { restartService(name, btn, stEl); };
+          item.appendChild(btn);
+          item.appendChild(stEl);
+        }
+        container.appendChild(item);
+      } else {
+        var badge = item.querySelector('.service-badge');
+        if (badge) {
+          badge.className = 'service-badge badge-' + status;
+          badge.textContent = status;
+        }
+      }
+      delete map[name];
+    });
+    Object.keys(map).forEach(function(n) { map[n].remove(); });
+    var ph = container.querySelector(':scope > span');
+    if (ph && keys.length) ph.remove();
+  }
+
+  function restartService(name, btn, stEl) {
+    if (!confirm('Restart ' + name + '?')) return;
+    btn.disabled = true; stEl.textContent = 'Restarting...'; stEl.style.color = 'var(--warn)';
+    // If restarting umbgs itself, the WS will drop — flag it so the overlay says the right thing
+    if (name === 'umbgs') expectingDisconnect = true;
+    fetch('/api/services/restart/' + encodeURIComponent(name), { method: 'POST' })
+      .then(function(r) { return r.json(); })
+      .then(function(d) {
+        if (d.ok) { stEl.textContent = 'Restart sent'; stEl.style.color = 'var(--accent)'; }
+        else throw new Error(d.error || 'failed');
+        setTimeout(function() { stEl.textContent = ''; btn.disabled = false; }, 5000);
+      })
+      .catch(function(e) {
+        // If umbgs restart, the fetch will fail because the server went down — that's expected
+        if (name === 'umbgs') {
+          stEl.textContent = 'Waiting for restart...'; stEl.style.color = 'var(--warn)';
+        } else {
+          stEl.textContent = e.message; stEl.style.color = 'var(--error)'; btn.disabled = false;
+        }
+        setTimeout(function() { stEl.textContent = ''; btn.disabled = false; }, 10000);
+      });
+  }
+
+  // --- Logs ---
+  activeServices = new Set(knownServices);
+
+  // Service dropdown toggle
+  var svcDropdownBtn = document.getElementById('svcDropdownBtn');
+  var svcDropdownMenu = document.getElementById('svcDropdownMenu');
+  svcDropdownBtn.onclick = function(e) {
+    e.stopPropagation();
+    svcDropdownMenu.classList.toggle('open');
+  };
+  document.addEventListener('click', function(e) {
+    if (!svcDropdownMenu.contains(e.target)) svcDropdownMenu.classList.remove('open');
+  });
+  document.getElementById('svcAll').onclick = function() {
+    knownServices.forEach(function(s) { activeServices.add(s); });
+    populateLogFilters(); applyFilters();
+  };
+  document.getElementById('svcNone').onclick = function() {
+    activeServices.clear();
+    populateLogFilters(); applyFilters();
+  };
+
+  function updateSvcBtnLabel() {
+    var n = activeServices.size;
+    if (n === knownServices.length) svcDropdownBtn.textContent = 'All services';
+    else if (n === 0) svcDropdownBtn.textContent = 'No services';
+    else svcDropdownBtn.textContent = n + ' service' + (n > 1 ? 's' : '');
+  }
+
+  function populateLogFilters() {
+    serviceFiltersEl.innerHTML = '';
+    knownServices.forEach(function(svc) {
+      var lbl = document.createElement('label');
+      var cb = document.createElement('input');
+      cb.type = 'checkbox'; cb.name = 'service'; cb.value = svc;
+      cb.checked = activeServices.has(svc);
+      cb.onchange = handleFilterChange;
+      lbl.appendChild(cb);
+      lbl.appendChild(document.createTextNode(svc));
+      serviceFiltersEl.appendChild(lbl);
+    });
+    updateSvcBtnLabel();
+    levelFilter.innerHTML =
+      '<option value="7">DEBUG</option><option value="6" selected>INFO</option>' +
+      '<option value="4">WARN</option><option value="3">ERROR</option>';
+    levelFilter.value = minLogLevel;
+  }
+
+  function handleFilterChange() {
+    activeServices.clear();
+    serviceFiltersEl.querySelectorAll('input:checked').forEach(function(b) { activeServices.add(b.value); });
+    minLogLevel = parseInt(levelFilter.value);
+    updateSvcBtnLabel();
+    applyFilters();
+  }
+
+  function applyFilters() {
+    logContainer.querySelectorAll('.log-line').forEach(function(line) {
+      var svc = line.dataset.service || 'unknown';
+      var lvl = parseInt(line.dataset.level || '6');
+      var show = (activeServices.has(svc) || svc === 'system' || svc === 'unknown') && lvl <= minLogLevel;
+      line.classList.toggle('hidden', !show);
+    });
+    if (autoScroll) scrollToBottom();
   }
 
   function addLog(entry) {
-    const list = document.getElementById('log-list');
-    const div = document.createElement('div');
-    const lvl = entry.Level || entry.level || 'INFO';
-    div.className = 'log-line ' + lvl;
-    const svc = entry.Service || entry.service || '';
-    const msg = entry.Message || entry.message || '';
-    div.textContent = '[' + svc + '] ' + msg;
-    list.appendChild(div);
-    while (list.children.length > MAX_LOGS) list.removeChild(list.firstChild);
-    list.scrollTop = list.scrollHeight;
+    var svc = entry.service || 'system';
+    var lvl = entry.level || 'INFO';
+    var msg = entry.message || '';
+    var ts = entry.timestamp;
+
+    // Auto-discover new services and add them to the filter
+    if (svc !== 'system' && svc !== 'unknown' && knownServices.indexOf(svc) === -1) {
+      knownServices.push(svc);
+      activeServices.add(svc);
+      populateLogFilters();
+    }
+
+    // Map level string to syslog priority
+    var priority = 6;
+    var lvlKey = 'info';
+    switch(lvl.toUpperCase()) {
+      case 'ERROR': priority = 3; lvlKey = 'error'; break;
+      case 'WARN': case 'WARNING': priority = 4; lvlKey = 'warn'; break;
+      case 'DEBUG': priority = 7; lvlKey = 'debug'; break;
+      case 'NOTICE': priority = 6; lvlKey = 'info'; break;
+      default: priority = 6; lvlKey = 'info';
+    }
+    // Display label for the badge
+    var lvlLabel = lvlKey === 'info' ? 'INFO' : lvlKey === 'debug' ? 'DBG' : lvlKey === 'warn' ? 'WARN' : 'ERR';
+
+    var line = document.createElement('div');
+    line.className = 'log-line ' + svc;
+    line.dataset.service = svc;
+    line.dataset.level = priority;
+    if (priority <= 3) line.classList.add('level-error');
+    else if (priority === 4) line.classList.add('level-warn');
+
+    var show = (activeServices.has(svc) || svc === 'system' || svc === 'unknown') && priority <= minLogLevel;
+    if (!show) line.classList.add('hidden');
+
+    var timeStr = '??:??:??';
+    if (ts) { var d = new Date(ts); if (!isNaN(d.getTime())) timeStr = d.toLocaleTimeString(); }
+
+    line.innerHTML = '<span class="timestamp">' + timeStr + '</span>' +
+      '<span class="lvl-badge lvl-' + lvlKey + '">' + lvlLabel + '</span>' +
+      '<span class="unit">' + esc(svc) + '</span>' +
+      '<span class="msg">' + esc(msg) + '</span>';
+
+    if (paused) {
+      // Still append to DOM but don't scroll — mark that new content arrived
+      newWhilePaused = true;
+      jumpBottom.classList.add('has-new');
+    }
+
+    logContainer.appendChild(line);
+    while (logContainer.children.length > MAX_LOG_LINES) logContainer.removeChild(logContainer.firstChild);
+    if (autoScroll && !paused) scrollToBottom();
   }
 
-  function setText(id, v) { document.getElementById(id).textContent = v; }
-  function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
-  function fmtUptime(s) {
-    if (!s) return '--';
-    const h = Math.floor(s/3600), m = Math.floor((s%3600)/60);
-    return h + 'h ' + m + 'm';
+  function scrollToBottom() { logContainer.scrollTop = logContainer.scrollHeight; }
+  function scrollToTop() { logContainer.scrollTop = 0; }
+
+  function updateJumpArrows() {
+    var scrollPos = logContainer.scrollTop;
+    var atBottom = logContainer.scrollHeight - scrollPos - logContainer.clientHeight < 5;
+    var atTop = scrollPos < 5;
+    jumpTop.classList.toggle('visible', !atTop && logContainer.scrollHeight > logContainer.clientHeight);
+    jumpBottom.classList.toggle('visible', !atBottom && logContainer.scrollHeight > logContainer.clientHeight);
   }
 
-  // WiFi row helpers (global so onclick works)
-  window.addWifiRow = function(ssid, psk) {
-    const list = document.getElementById('cfg-wifi-list');
-    const row = document.createElement('div');
-    row.style.cssText = 'display:flex;gap:6px;margin-bottom:6px;align-items:center;';
-    row.innerHTML = '<input type="text" placeholder="SSID" value="' + esc(ssid) + '" style="flex:1;" class="wifi-ssid">' +
-      '<input type="password" placeholder="Password" value="' + esc(psk) + '" style="flex:1;" class="wifi-psk">' +
-      '<button class="btn" style="padding:6px 10px;background:#d9534f;color:#fff;min-width:36px;" onclick="this.parentElement.remove()">X</button>';
-    list.appendChild(row);
+  logContainer.onscroll = function() {
+    var atBottom = logContainer.scrollHeight - logContainer.scrollTop - logContainer.clientHeight < 5;
+    // Auto-pause when user scrolls up, auto-resume when they reach bottom
+    if (!atBottom && autoScroll) {
+      autoScroll = false;
+      paused = true;
+      pauseBtn.textContent = 'Resume';
+    } else if (atBottom && !autoScroll) {
+      autoScroll = true;
+      paused = false;
+      pauseBtn.textContent = 'Pause';
+      newWhilePaused = false;
+      jumpBottom.classList.remove('has-new');
+    }
+    updateJumpArrows();
+    document.body.classList.add('scrolling');
+    clearTimeout(scrollTimeout);
+    scrollTimeout = setTimeout(function() { document.body.classList.remove('scrolling'); }, 150);
   };
 
-  // Load config into form fields
+  pauseBtn.onclick = function() {
+    paused = !paused;
+    pauseBtn.textContent = paused ? 'Resume' : 'Pause';
+    if (!paused) {
+      autoScroll = true;
+      newWhilePaused = false;
+      jumpBottom.classList.remove('has-new');
+      scrollToBottom();
+    }
+  };
+  clearBtn.onclick = function() { logContainer.innerHTML = ''; updateJumpArrows(); };
+  jumpTop.onclick = function() { scrollToTop(); };
+  jumpBottom.onclick = function() {
+    autoScroll = true; paused = false;
+    pauseBtn.textContent = 'Pause';
+    newWhilePaused = false;
+    jumpBottom.classList.remove('has-new');
+    scrollToBottom();
+  };
+  levelFilter.onchange = handleFilterChange;
+
+  // --- Packets ---
+  function addPacket(evt) {
+    if (pktEmpty) pktEmpty.style.display = 'none';
+    var p = evt.packet || {};
+    var st = evt.status;
+    var cls = st === 0 ? 'ok' : st === 2 ? 'buf' : 'fail';
+    var txt = st === 0 ? 'OK' : st === 2 ? 'BUF' : 'FAIL';
+    var div = document.createElement('div');
+    div.className = 'pkt';
+    div.innerHTML = '<span class="src">' + esc(p.source || '?') + '</span>' +
+      '<span class="raw">' + esc(p.raw_data || '') + '</span>' +
+      '<span class="st ' + cls + '">' + txt + '</span>';
+    pktContainer.insertBefore(div, pktContainer.firstChild);
+    while (pktContainer.children.length > MAX_PACKETS) pktContainer.removeChild(pktContainer.lastChild);
+  }
+
+  // --- Crash logs ---
+  document.getElementById('fetchCrashBtn').onclick = function() {
+    var boot = document.getElementById('bootSelect').value;
+    var lines = document.getElementById('crashLines').value;
+    var c = document.getElementById('crashLogContainer');
+    var st = document.getElementById('crashLogStatus');
+    var btn = document.getElementById('fetchCrashBtn');
+    c.textContent = 'Fetching...'; st.textContent = ''; btn.disabled = true;
+    fetch('/api/crashlogs?boot=' + boot + '&lines=' + lines)
+      .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); })
+      .then(function(t) { c.textContent = t || '(empty)'; st.textContent = 'Loaded boot ' + boot; st.style.color = ''; })
+      .catch(function(e) { c.textContent = 'Error: ' + e.message; st.textContent = 'Failed'; st.style.color = 'var(--error)'; })
+      .finally(function() { btn.disabled = false; });
+  };
+
+  // --- Config ---
   function loadConfig() {
-    fetch('/api/config').then(r => r.json()).then(cfg => {
-      // General
-      document.getElementById('cfg-callsign').value = cfg.callsign || '';
-      document.getElementById('cfg-ssid').value = cfg.ssid || 0;
-      document.getElementById('cfg-api_url').value = cfg.api_url || '';
-      document.getElementById('cfg-log_level').value = cfg.log_level || 'info';
-      // WiFi
-      const wifiList = document.getElementById('cfg-wifi-list');
-      wifiList.innerHTML = '';
-      (cfg.wifi?.networks || []).forEach(n => addWifiRow(n.ssid || '', n.psk || ''));
-      // APRS
-      document.getElementById('cfg-aprs-enabled').checked = cfg.aprs?.enabled ?? true;
-      document.getElementById('cfg-aprs-freq').value = cfg.aprs?.frequency || 144.390;
-      document.getElementById('cfg-aprs-gain').value = cfg.aprs?.gain ?? 42;
-      document.getElementById('cfg-aprs-igserver').value = cfg.aprs?.igserver || 'noam.aprs2.net';
-      // LoRa
-      document.getElementById('cfg-lora-enabled').checked = cfg.lora?.enabled ?? true;
-      document.getElementById('cfg-lora-baud').value = cfg.lora?.baud || 9600;
-      document.getElementById('cfg-lora-device').value = cfg.lora?.device || '';
-      // GPS
-      document.getElementById('cfg-gps-enabled').checked = cfg.gps?.enabled ?? true;
-      document.getElementById('cfg-gps-interval').value = cfg.gps?.report_interval || 60;
-      // Display
-      document.getElementById('cfg-display-enabled').checked = cfg.display?.enabled ?? false;
-      document.getElementById('cfg-display-url').value = cfg.display?.url || '';
-      // Callsign for overview
-      let cs = (cfg.callsign||'').toUpperCase();
-      if(cfg.ssid>0) cs += '-'+cfg.ssid;
-      setText('s-callsign', cs||'--');
-    }).catch(e => {
-      document.getElementById('cfg-status').textContent = 'Failed to load config: ' + e;
+    fetch('/api/config').then(function(r) { return r.json(); }).then(function(envelope) {
+      configVersion = envelope.version || 0;
+      var cfg = envelope.config || envelope;
+      populateConfigForm(cfg);
+      document.getElementById('cfgConflict').style.display = 'none';
+      var cs = (cfg.callsign || '').toUpperCase();
+      if (cfg.ssid > 0) cs += '-' + cfg.ssid;
+      document.getElementById('sysCallsign').textContent = cs || '--';
+    }).catch(function(e) {
+      document.getElementById('cfgStatus').textContent = 'Failed to load: ' + e;
+      document.getElementById('cfgStatus').style.color = 'var(--error)';
     });
   }
 
-  window.saveConfig = function() {
-    // Collect WiFi networks from dynamic rows
-    const wifiNets = [];
-    document.querySelectorAll('#cfg-wifi-list > div').forEach(row => {
-      const ssid = row.querySelector('.wifi-ssid').value.trim();
-      const psk = row.querySelector('.wifi-psk').value;
-      if (ssid) wifiNets.push({ssid: ssid, psk: psk});
-    });
+  function populateConfigForm(cfg) {
+    document.getElementById('cfg-callsign').value = cfg.callsign || '';
+    document.getElementById('cfg-ssid').value = cfg.ssid || 0;
+    document.getElementById('cfg-api_url').value = cfg.api_url || '';
+    document.getElementById('cfg-log_level').value = cfg.log_level || 'info';
+    var wl = document.getElementById('cfg-wifi-list'); wl.innerHTML = '';
+    (cfg.wifi && cfg.wifi.networks || []).forEach(function(n) { addWifiRow(n.ssid || '', n.psk || ''); });
+    document.getElementById('cfg-aprs-enabled').checked = cfg.aprs ? cfg.aprs.enabled : true;
+    document.getElementById('cfg-aprs-freq').value = cfg.aprs ? cfg.aprs.frequency : 144.390;
+    document.getElementById('cfg-aprs-gain').value = cfg.aprs ? cfg.aprs.gain : 0;
+    document.getElementById('cfg-aprs-igserver').value = cfg.aprs ? cfg.aprs.igserver || '' : '';
+    document.getElementById('cfg-aprs-comment').value = cfg.aprs ? cfg.aprs.beacon_comment || '' : '';
+    document.getElementById('cfg-lora-enabled').checked = cfg.lora ? cfg.lora.enabled : true;
+    document.getElementById('cfg-lora-baud').value = cfg.lora ? cfg.lora.baud : 9600;
+    document.getElementById('cfg-lora-device').value = cfg.lora ? cfg.lora.device || '' : '';
+    document.getElementById('cfg-gps-enabled').checked = cfg.gps ? cfg.gps.enabled : true;
+    document.getElementById('cfg-gps-interval').value = cfg.gps ? cfg.gps.report_interval : 60;
+    document.getElementById('cfg-display-enabled').checked = cfg.display ? cfg.display.enabled : false;
+    document.getElementById('cfg-display-url').value = cfg.display ? cfg.display.url || '' : '';
+  }
 
-    const cfg = {
+  function handleConfigBroadcast(data) {
+    var v = data.version || 0;
+    if (v > configVersion) {
+      configVersion = v;
+      if (data.config) populateConfigForm(data.config);
+      var st = document.getElementById('cfgStatus');
+      st.textContent = 'Config updated by another session (v' + v + ')';
+      st.style.color = 'var(--info)';
+      setTimeout(function() { st.textContent = ''; }, 5000);
+    }
+  }
+
+  function addWifiRow(ssid, psk) {
+    var list = document.getElementById('cfg-wifi-list');
+    var row = document.createElement('div');
+    row.className = 'wifi-row';
+    row.innerHTML = '<input type="text" placeholder="SSID" value="' + esc(ssid) + '" class="wifi-ssid">' +
+      '<input type="password" placeholder="Password" value="' + esc(psk) + '" class="wifi-psk">' +
+      '<button class="btn btn-danger btn-small" onclick="this.parentElement.remove()">X</button>';
+    list.appendChild(row);
+  }
+  window.addWifiRow = addWifiRow;
+  document.getElementById('addWifiBtn').onclick = function() { addWifiRow('', ''); };
+  document.getElementById('cfgReloadBtn').onclick = loadConfig;
+
+  document.getElementById('saveConfigBtn').onclick = function() {
+    var nets = [];
+    document.querySelectorAll('#cfg-wifi-list .wifi-row').forEach(function(r) {
+      var s = r.querySelector('.wifi-ssid').value.trim();
+      var p = r.querySelector('.wifi-psk').value;
+      if (s) nets.push({ ssid: s, psk: p });
+    });
+    var cfg = {
       callsign: document.getElementById('cfg-callsign').value.trim(),
       ssid: parseInt(document.getElementById('cfg-ssid').value) || 0,
       api_url: document.getElementById('cfg-api_url').value.trim(),
       log_level: document.getElementById('cfg-log_level').value,
-      wifi: { networks: wifiNets },
+      wifi: { networks: nets },
       aprs: {
         enabled: document.getElementById('cfg-aprs-enabled').checked,
-        kiss_host: '127.0.0.1',
-        kiss_port: 8001,
+        kiss_host: '127.0.0.1', kiss_port: 8001,
         frequency: parseFloat(document.getElementById('cfg-aprs-freq').value) || 144.390,
         gain: parseInt(document.getElementById('cfg-aprs-gain').value) || 0,
         igserver: document.getElementById('cfg-aprs-igserver').value.trim(),
+        beacon_comment: document.getElementById('cfg-aprs-comment').value.trim(),
       },
       lora: {
         enabled: document.getElementById('cfg-lora-enabled').checked,
@@ -390,29 +1205,82 @@ body {
       },
       update: { enabled: true, channel: 'stable' },
     };
-
-    const status = document.getElementById('cfg-status');
-    status.textContent = 'Saving...';
+    var st = document.getElementById('cfgStatus');
+    st.textContent = 'Saving...'; st.style.color = 'var(--text-muted)';
     fetch('/api/config', {
       method: 'PUT',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify(cfg)
-    }).then(r => r.json()).then(res => {
-      if (res.ok) {
-        status.textContent = 'Config saved.' + (res.restart_needed?.length ? ' Restart needed: ' + res.restart_needed.join(', ') : '');
-        status.style.color = 'var(--green)';
-      } else {
-        status.textContent = 'Error: ' + (res.error || 'unknown');
-        status.style.color = 'var(--red)';
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ version: configVersion, config: cfg })
+    })
+    .then(function(r) { return r.json().then(function(d) { return { status: r.status, data: d }; }); })
+    .then(function(res) {
+      if (res.status === 409) {
+        document.getElementById('cfgConflict').style.display = 'block';
+        st.textContent = 'Conflict: config was modified elsewhere. Reload and retry.';
+        st.style.color = 'var(--error)';
+        return;
       }
-      setTimeout(() => { status.style.color = 'var(--muted)'; }, 5000);
-    }).catch(e => {
-      status.textContent = 'Error: ' + e;
-      status.style.color = 'var(--red)';
-    });
+      if (res.data.ok) {
+        configVersion = res.data.version || configVersion;
+        document.getElementById('cfgConflict').style.display = 'none';
+        var msg = 'Saved.';
+        if (res.data.restart_needed && res.data.restart_needed.length)
+          msg += ' Restart needed: ' + res.data.restart_needed.join(', ');
+        st.textContent = msg; st.style.color = 'var(--accent)';
+      } else {
+        st.textContent = 'Error: ' + (res.data.error || 'unknown'); st.style.color = 'var(--error)';
+      }
+      setTimeout(function() { st.style.color = 'var(--text-muted)'; }, 5000);
+    })
+    .catch(function(e) { st.textContent = 'Error: ' + e; st.style.color = 'var(--error)'; });
   };
 
-  // Init
+  // --- Admin actions ---
+  document.getElementById('checkUpdateBtn').onclick = function() {
+    var st = document.getElementById('updateStatus');
+    var btn = document.getElementById('checkUpdateBtn');
+    st.textContent = 'Checking...'; st.style.color = 'var(--text-muted)'; btn.disabled = true;
+    fetch('/api/update', { method: 'POST' })
+      .then(function(r) { return r.json(); })
+      .then(function(d) {
+        st.textContent = d.ok ? (d.message || 'No update available.') : 'Error: ' + (d.error || 'unknown');
+        st.style.color = d.ok ? 'var(--accent)' : 'var(--error)';
+      })
+      .catch(function(e) { st.textContent = 'Error: ' + e; st.style.color = 'var(--error)'; })
+      .finally(function() { btn.disabled = false; });
+  };
+
+  document.getElementById('rebootButton').onclick = function() {
+    if (!confirm('Reboot the ground station? All connections will be lost.')) return;
+    var st = document.getElementById('rebootStatus');
+    document.getElementById('rebootButton').disabled = true;
+    st.textContent = 'Sending reboot command...';
+    expectingDisconnect = true;
+    fetch('/api/reboot', { method: 'POST' })
+      .then(function(r) { return r.json(); })
+      .then(function() {
+        st.textContent = 'Reboot sent. System going down.'; st.style.color = 'var(--accent)';
+        showOverlay('Rebooting...');
+      })
+      .catch(function(e) {
+        // May fail if reboot happens before response — that's OK
+        showOverlay('Rebooting...');
+      });
+  };
+
+  // --- Helpers ---
+  function esc(s) { var d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+  function fmtUptime(s) {
+    if (!s) return '--';
+    var d = Math.floor(s / 86400);
+    var h = Math.floor((s % 86400) / 3600);
+    var m = Math.floor((s % 3600) / 60);
+    if (d > 0) return d + 'd ' + h + 'h';
+    return h + 'h ' + m + 'm';
+  }
+
+  // --- Init ---
+  populateLogFilters();
   connect();
   loadConfig();
 })();
