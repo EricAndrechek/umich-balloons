@@ -289,6 +289,12 @@ dhcp-option=114,http://10.42.0.1/
 // distros) or we can't write, we log and continue — the dashboard will
 // still be reachable via the AP's IP, just without wildcard DNS or
 // option 114.
+//
+// NOTE: install.sh seeds this same file at install time, which is what
+// actually matters on first boot — NM may activate the hotspot fallback
+// before umbgs has a chance to run, and dnsmasq reads the drop-in dir
+// once at fork time. This runtime write is a safety net for upgrades
+// and for the case where something clobbered the file post-install.
 func (m *Manager) ensureCaptivePortalDNS() error {
 	dir := filepath.Dir(dnsmasqDropInPath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -325,8 +331,14 @@ func (m *Manager) ensureCaptivePortalDNS() error {
 //     the case where something else is holding :80.)
 //
 // Both rules are idempotent: we check with -C first and only -I if
-// absent. iptables is assumed present — it ships by default on Pi OS
-// and is pulled in transitively by NetworkManager.
+// absent. iptables must be installed explicitly on Pi OS Bookworm —
+// the default firewall is nftables and the `iptables` package (which
+// provides the iptables-nft compat shim) is NOT pulled in by
+// network-manager. install.sh adds it to the apt install list; if
+// it's still missing we log and continue rather than failing the
+// whole subsystem (the hotspot still works, it just forwards AP
+// client traffic out the uplink, which is a bandwidth leak but not
+// a crash).
 //
 // We don't clean up on shutdown: the rules are safe to leave in place
 // (they only affect the wifi interface which is a no-op during station

@@ -63,6 +63,7 @@ apt-get install -y -qq \
     gpsd gpsd-tools \
     chrony \
     network-manager \
+    iptables \
     plymouth plymouth-themes \
     cage \
     cog \
@@ -170,6 +171,15 @@ config_file "networkmanager.conf" /etc/NetworkManager/conf.d/umbgs.conf
 # Polkit rule so the umbgs service (running as root) can manage NM without interactive auth
 mkdir -p /etc/polkit-1/rules.d
 config_file "99-umbgs-networkmanager.rules" /etc/polkit-1/rules.d/99-umbgs-networkmanager.rules
+
+# Captive portal dnsmasq drop-in: must be present BEFORE NM first spawns
+# its shared-mode dnsmasq for the AP hotspot. If we relied on the umbgs
+# runtime to write it, the first boot would race — NM activates the
+# hotspot fallback in parallel with umbgs starting, and if NM wins the
+# race, dnsmasq forks without our wildcard DNS config and phones never
+# see the captive portal. Writing it at install time avoids the race.
+mkdir -p /etc/NetworkManager/dnsmasq-shared.d
+config_file "dnsmasq-shared-captive.conf" /etc/NetworkManager/dnsmasq-shared.d/umbgs-captive.conf
 
 # ─── System hardening ─────────────────────────────────────────────
 log "Applying system hardening..."
