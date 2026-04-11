@@ -166,11 +166,29 @@ func (m *Manager) ensureAPConnection() error {
 	}
 	// Do NOT close shared system bus.
 
+	// Hotspot is configured as a last-resort autoconnect fallback.
+	//
+	// NM's can_auto_connect (src/core/devices/wifi/nm-device-wifi.c) always
+	// allows AP mode profiles in the autoconnect loop, so autoconnect=true
+	// on a mode=ap profile is a supported, documented NM pattern. The very
+	// negative autoconnect-priority ensures any configured infrastructure
+	// WiFi wins when one is in range — the hotspot only comes up when
+	// every other autoconnect candidate has been ruled out.
+	//
+	// autoconnect-retries=0 means "retry forever": without this NM gives up
+	// after the default 4 failures, which defeats the entire fallback design
+	// for a chase vehicle that may spend hours outside any known SSID.
+	//
+	// Previously this was autoconnect=false with no explicit activation path,
+	// so the profile existed in NM but nothing ever brought it up — the
+	// hotspot SSID never appeared to nearby phones in the field.
 	settings := map[string]map[string]dbus.Variant{
 		"connection": {
-			"id":          dbus.MakeVariant(connID),
-			"type":        dbus.MakeVariant("802-11-wireless"),
-			"autoconnect": dbus.MakeVariant(false),
+			"id":                   dbus.MakeVariant(connID),
+			"type":                 dbus.MakeVariant("802-11-wireless"),
+			"autoconnect":          dbus.MakeVariant(true),
+			"autoconnect-priority": dbus.MakeVariant(int32(-999)),
+			"autoconnect-retries":  dbus.MakeVariant(int32(0)),
 		},
 		"802-11-wireless": {
 			"ssid": dbus.MakeVariant([]byte(apSSID)),
