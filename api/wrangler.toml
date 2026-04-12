@@ -4,7 +4,7 @@ compatibility_date = "2026-04-05"
 workers_dev = false
 
 [build]
-command = "SHA=\"${WORKERS_CI_COMMIT_SHA:-dev}\"; printf 'export const COMMIT_SHA = \"%s\";\\n' \"${SHA:0:7}\" > src/version.ts"
+command = "printf 'export const COMMIT_SHA = \"%.7s\";\\n' \"${WORKERS_CI_COMMIT_SHA:-dev}\" > src/version.ts"
 
 [[routes]]
 pattern = "api.umich-balloons.com"
