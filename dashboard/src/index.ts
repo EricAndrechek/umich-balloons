@@ -57,6 +57,15 @@ const SUB_POLLS_PER_TICK = 3;
 const SUB_POLL_MS = 20_000;
 
 async function fanOutCron(env: Env): Promise<void> {
+  // Quick probe: if no launch groups are active, bail before entering
+  // the sub-poll loop. handleCron itself has the same check, but doing
+  // it here also avoids 40s of wall-time sleeps between sub-polls —
+  // keeps the dormant invocation fast and cheap on the free tier.
+  const active = await env.DB.prepare(
+    "SELECT 1 FROM launch_groups WHERE active = 1 LIMIT 1",
+  ).first();
+  if (!active) return;
+
   for (let i = 0; i < SUB_POLLS_PER_TICK; i++) {
     try {
       await handleCron(env);
